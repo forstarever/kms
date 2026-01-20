@@ -12,8 +12,10 @@ use crate::{core::KMS, error::KmsError, result::KResult};
 
 pub mod access;
 pub mod google_cse;
+pub mod health;
 pub mod kmip;
 pub mod ms_dke;
+pub mod root_redirect;
 pub mod ui_auth;
 
 impl actix_web::error::ResponseError for KmsError {
