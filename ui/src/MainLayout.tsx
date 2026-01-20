@@ -21,6 +21,12 @@ const MainLayout: React.FC<MainLayoutProps> = ({ isDarkMode, setIsDarkMode, auth
     const [loading, setLoading] = useState<boolean>(true);
     const { logout, idToken, serverUrl, userId } = useAuth();
 
+    const serverHealthLabel =
+        serverHealthLatencyMs === null
+            ? `Health: ${serverHealth}`
+            : `Health: ${serverHealth} (${serverHealthLatencyMs}ms)`;
+    const serverHealthMarker = serverHealth === "DOWN" ? "🔴" : "🟢";
+
     useEffect(() => {
         async function fetchServerVersion() {
             if (idToken || authMethod != "JWT") {
@@ -108,14 +114,10 @@ const MainLayout: React.FC<MainLayoutProps> = ({ isDarkMode, setIsDarkMode, auth
                             }
 
                             if (!version) {
-                                return serverHealthLatencyMs === null
-                                    ? `Health: ${serverHealth}`
-                                    : `Health: ${serverHealth} (${serverHealthLatencyMs}ms)`;
+                                return `${serverHealthMarker} ${serverHealthLabel}`;
                             }
 
-                            return serverHealthLatencyMs === null
-                                ? `${version} — Health: ${serverHealth}`
-                                : `${version} — Health: ${serverHealth} (${serverHealthLatencyMs}ms)`;
+                            return `${version} — ${serverHealthMarker} ${serverHealthLabel}`;
                         })()}
                     />
                 </Layout>
