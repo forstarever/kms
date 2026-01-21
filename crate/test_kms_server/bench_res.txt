@@ -1,0 +1,276 @@
+chenghao@zen-machine:~/kms/crate/test_kms_server$ cargo bench
+warning: cosmian_kms_server@5.14.1: Building OpenSSL 3.1.2 locally in FIPS mode (explicit/legacy FIPS requested, non-Nix environment)
+warning: cosmian_kms_server@5.14.1: Downloading https://package.cosmian.com/openssl/openssl-3.1.2.tar.gz
+warning: cosmian_kms_server@5.14.1: Running Configure (FIPS) -> cd "/home/chenghao/kms/target/release/build/cosmian_kms_server-bcfeb21772806dba/out/openssl_build/src/openssl-3.1.2" && "perl" "./Configure" "no-shared" "--prefix=/home/chenghao/kms/target/openssl-fips-3.1.2-linux-x86_64" "--openssldir=/home/chenghao/kms/target/openssl-fips-3.1.2-linux-x86_64/ssl" "--libdir=lib" "enable-fips" "linux-x86_64"
+warning: cosmian_kms_server@5.14.1: Running make depend -> cd "/home/chenghao/kms/target/release/build/cosmian_kms_server-bcfeb21772806dba/out/openssl_build/src/openssl-3.1.2" && "make" "depend"
+warning: cosmian_kms_server@5.14.1: Running make -j -> cd "/home/chenghao/kms/target/release/build/cosmian_kms_server-bcfeb21772806dba/out/openssl_build/src/openssl-3.1.2" && "make" "-j" "384"
+warning: cosmian_kms_server@5.14.1: Running make install -> cd "/home/chenghao/kms/target/release/build/cosmian_kms_server-bcfeb21772806dba/out/openssl_build/src/openssl-3.1.2" && "make" "install_sw" "install_ssldirs" "install_fips" "-j" "384"
+    Finished `bench` profile [optimized] target(s) in 0.22s
+     Running unittests src/lib.rs (/home/chenghao/kms/target/release/deps/test_kms_server-429ff76ed93883d3)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/benches.rs (/home/chenghao/kms/target/release/deps/benches-b8434742db128ff2)
+Symmetric key tests/AES 128bit key creation
+                        time:   [1.0533 ms 1.0724 ms 1.0917 ms]
+                        change: [-3.6314% -1.6208% +0.4792%] (p = 0.13 > 0.05)
+                        No change in performance detected.
+Found 9 outliers among 150 measurements (6.00%)
+  9 (6.00%) low mild
+Symmetric key tests/AES 256bit key creation
+                        time:   [1.1344 ms 1.1422 ms 1.1502 ms]
+                        change: [-4.7945% -2.4490% -0.5354%] (p = 0.02 < 0.05)
+                        Change within noise threshold.
+Found 6 outliers among 150 measurements (4.00%)
+  1 (0.67%) low severe
+  5 (3.33%) high mild
+
+Symmetric encryption/AES 128 GCM 128bit encryption of 1 plaintext(s)
+                        time:   [484.07 µs 485.32 µs 486.61 µs]
+                        change: [-14.017% -11.661% -9.4299%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 5 outliers among 1000 measurements (0.50%)
+  3 (0.30%) low mild
+  2 (0.20%) high severe
+
+Symmetric encryption/AES 256 GCM 256bit encryption of 1 plaintext(s)
+                        time:   [654.67 µs 660.19 µs 665.63 µs]
+                        change: [+25.667% +27.002% +28.213%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+
+Symmetric encryption/AES GCM 128bit decryption of 1 ciphertext(s)
+                        time:   [430.01 µs 432.24 µs 434.41 µs]
+                        change: [+12.412% +13.673% +14.917%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 15 outliers among 1000 measurements (1.50%)
+  13 (1.30%) low severe
+  2 (0.20%) low mild
+
+Symmetric encryption/AES GCM 256bit decryption of 1 ciphertext(s)
+                        time:   [432.08 µs 433.71 µs 435.38 µs]
+                        change: [+5.0090% +6.8194% +8.5930%] (p = 0.00 < 0.05)
+                        Performance has regressed.
+Found 2 outliers among 1000 measurements (0.20%)
+  2 (0.20%) high severe
+
+Benchmarking Symmetric encryption/AES 256 GCM 256bit encryption of 100000 plaintext(s): Warming up for 3.0000 s
+Warning: Unable to complete 15 samples in 10.0s. You may wish to increase target time to 59.0s, or reduce sample count to 10.
+Symmetric encryption/AES 256 GCM 256bit encryption of 100000 plaintext(s)
+                        time:   [3.9009 s 3.9161 s 3.9319 s]
+                        change: [-2.9543% -2.0857% -1.1874%] (p = 0.00 < 0.05)
+                        Performance has improved.
+Found 1 outliers among 15 measurements (6.67%)
+  1 (6.67%) high mild
+
+Benchmarking Symmetric encryption/AES GCM 256bit decryption of 100000 ciphertext(s): Warming up for 3.0000 s
+Warning: Unable to complete 15 samples in 10.0s. You may wish to increase target time to 55.9s, or reduce sample count to 10.
+Symmetric encryption/AES GCM 256bit decryption of 100000 ciphertext(s)
+                        time:   [3.6403 s 3.6718 s 3.7005 s]
+                        change: [-3.4413% -1.8534% -0.3472%] (p = 0.03 < 0.05)
+                        Change within noise threshold.
+
+RSA tests/RSA 2048bit key pair creation
+                        time:   [44.446 ms 45.902 ms 47.391 ms]
+                        change: [-6.3797% -1.8678% +2.9111%] (p = 0.44 > 0.05)
+                        No change in performance detected.
+Found 2 outliers among 150 measurements (1.33%)
+  2 (1.33%) high mild
+Benchmarking RSA tests/RSA 4096bit key pair creation: Warming up for 3.0000 s
+Warning: Unable to complete 150 samples in 45.0s. You may wish to increase target time to 82.5s, or reduce sample count to 80.
+RSA tests/RSA 4096bit key pair creation
+                        time:   [392.32 ms 434.63 ms 478.69 ms]
+                        change: [-18.637% -6.0225% +7.6918%] (p = 0.38 > 0.05)
+                        No change in performance detected.
+Found 2 outliers among 150 measurements (1.33%)
+  2 (1.33%) high mild
+
+RSA tests/RSA OAEP 2048bit encryption
+                        time:   [634.49 µs 635.73 µs 637.13 µs]
+                        change: [+0.5219% +1.1505% +1.7268%] (p = 0.00 < 0.05)
+                        Change within noise threshold.
+Found 61 outliers among 1000 measurements (6.10%)
+  3 (0.30%) low severe
+  38 (3.80%) low mild
+  13 (1.30%) high mild
+  7 (0.70%) high severe
+
+RSA tests/RSA OAEP 4096bit encryption
+                        time:   [761.94 µs 763.34 µs 764.92 µs]
+                        change: [-0.6057% +0.2462% +0.9324%] (p = 0.55 > 0.05)
+                        No change in performance detected.
+Found 13 outliers among 1000 measurements (1.30%)
+  9 (0.90%) low mild
+  2 (0.20%) high mild
+  2 (0.20%) high severe
+
+Benchmarking RSA tests/RSA OAEP 2048bit decryption: Warming up for 3.0000 s
+Warning: Unable to complete 1000 samples in 10.0s. You may wish to increase target time to 36.9s, or reduce sample count to 270.
+RSA tests/RSA OAEP 2048bit decryption
+                        time:   [36.573 ms 36.584 ms 36.595 ms]
+                        change: [-0.0265% +0.0172% +0.0601%] (p = 0.43 > 0.05)
+                        No change in performance detected.
+Found 44 outliers among 1000 measurements (4.40%)
+  37 (3.70%) high mild
+  7 (0.70%) high severe
+
+Benchmarking RSA tests/RSA OAEP 4096bit decryption: Warming up for 3.0000 s
+Warning: Unable to complete 1000 samples in 10.0s. You may wish to increase target time to 253.8s, or reduce sample count to 30.
+RSA tests/RSA OAEP 4096bit decryption
+                        time:   [251.49 ms 251.51 ms 251.54 ms]
+Found 41 outliers among 1000 measurements (4.10%)
+  38 (3.80%) high mild
+  3 (0.30%) high severe
+
+RSA tests/RSA AES KWP 2048bit encryption
+                        time:   [614.25 µs 615.17 µs 616.13 µs]
+Found 81 outliers among 1000 measurements (8.10%)
+  4 (0.40%) low severe
+  32 (3.20%) low mild
+  32 (3.20%) high mild
+  13 (1.30%) high severe
+
+RSA tests/RSA AES KWP 4096bit encryption
+                        time:   [763.30 µs 765.26 µs 767.28 µs]
+Found 22 outliers among 1000 measurements (2.20%)
+  3 (0.30%) low severe
+  12 (1.20%) low mild
+  4 (0.40%) high mild
+  3 (0.30%) high severe
+
+Benchmarking RSA tests/RSA AES KWP 2048bit decryption: Warming up for 3.0000 s
+Warning: Unable to complete 1000 samples in 10.0s. You may wish to increase target time to 36.9s, or reduce sample count to 270.
+RSA tests/RSA AES KWP 2048bit decryption
+                        time:   [36.640 ms 36.650 ms 36.661 ms]
+Found 70 outliers among 1000 measurements (7.00%)
+  62 (6.20%) high mild
+  8 (0.80%) high severe
+
+Benchmarking RSA tests/RSA AES KWP 4096bit decryption: Warming up for 3.0000 s
+Warning: Unable to complete 1000 samples in 10.0s. You may wish to increase target time to 254.0s, or reduce sample count to 30.
+RSA tests/RSA AES KWP 4096bit decryption
+                        time:   [252.04 ms 252.41 ms 252.82 ms]
+Found 76 outliers among 1000 measurements (7.60%)
+  48 (4.80%) high mild
+  28 (2.80%) high severe
+
+AES GCM - plaintext of 64 bytes/128-bit key encrypt/1 request
+                        time:   [456.51 µs 459.83 µs 463.91 µs]
+                        thrpt:  [2.1556 Kelem/s 2.1747 Kelem/s 2.1905 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high mild
+AES GCM - plaintext of 64 bytes/128-bit key decrypt/1 request
+                        time:   [395.41 µs 402.41 µs 408.96 µs]
+                        thrpt:  [2.4452 Kelem/s 2.4850 Kelem/s 2.5290 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) low mild
+AES GCM - plaintext of 64 bytes/256-bit key encrypt/1 request
+                        time:   [475.15 µs 487.74 µs 502.88 µs]
+                        thrpt:  [1.9886 Kelem/s 2.0503 Kelem/s 2.1046 Kelem/s]
+AES GCM - plaintext of 64 bytes/256-bit key decrypt/1 request
+                        time:   [315.96 µs 356.57 µs 381.64 µs]
+                        thrpt:  [2.6203 Kelem/s 2.8045 Kelem/s 3.1650 Kelem/s]
+AES GCM - plaintext of 64 bytes/128-bit key encrypt/10 requests
+                        time:   [1.2071 ms 1.2174 ms 1.2219 ms]
+                        thrpt:  [8.1841 Kelem/s 8.2143 Kelem/s 8.2845 Kelem/s]
+AES GCM - plaintext of 64 bytes/128-bit key decrypt/10 requests
+                        time:   [1.0564 ms 1.0698 ms 1.0798 ms]
+                        thrpt:  [9.2613 Kelem/s 9.3475 Kelem/s 9.4658 Kelem/s]
+AES GCM - plaintext of 64 bytes/256-bit key encrypt/10 requests
+                        time:   [908.36 µs 912.44 µs 921.73 µs]
+                        thrpt:  [10.849 Kelem/s 10.960 Kelem/s 11.009 Kelem/s]
+AES GCM - plaintext of 64 bytes/256-bit key decrypt/10 requests
+                        time:   [1.1009 ms 1.1099 ms 1.1206 ms]
+                        thrpt:  [8.9237 Kelem/s 9.0100 Kelem/s 9.0837 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) low mild
+AES GCM - plaintext of 64 bytes/128-bit key encrypt/50 requests
+                        time:   [4.2307 ms 4.3662 ms 4.4525 ms]
+                        thrpt:  [11.230 Kelem/s 11.452 Kelem/s 11.818 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) low severe
+AES GCM - plaintext of 64 bytes/128-bit key decrypt/50 requests
+                        time:   [3.3561 ms 3.5093 ms 3.7079 ms]
+                        thrpt:  [13.485 Kelem/s 14.248 Kelem/s 14.898 Kelem/s]
+AES GCM - plaintext of 64 bytes/256-bit key encrypt/50 requests
+                        time:   [3.3768 ms 3.9955 ms 4.3854 ms]
+                        thrpt:  [11.401 Kelem/s 12.514 Kelem/s 14.807 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) low severe
+AES GCM - plaintext of 64 bytes/256-bit key decrypt/50 requests
+                        time:   [3.6187 ms 3.7441 ms 3.8667 ms]
+                        thrpt:  [12.931 Kelem/s 13.354 Kelem/s 13.817 Kelem/s]
+AES GCM - plaintext of 64 bytes/128-bit key encrypt/100 requests
+                        time:   [7.6301 ms 7.6942 ms 7.7460 ms]
+                        thrpt:  [12.910 Kelem/s 12.997 Kelem/s 13.106 Kelem/s]
+Found 3 outliers among 10 measurements (30.00%)
+  2 (20.00%) low severe
+  1 (10.00%) high severe
+AES GCM - plaintext of 64 bytes/128-bit key decrypt/100 requests
+                        time:   [5.9310 ms 6.5565 ms 6.8786 ms]
+                        thrpt:  [14.538 Kelem/s 15.252 Kelem/s 16.860 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) low severe
+AES GCM - plaintext of 64 bytes/256-bit key encrypt/100 requests
+                        time:   [7.9719 ms 8.0827 ms 8.1645 ms]
+                        thrpt:  [12.248 Kelem/s 12.372 Kelem/s 12.544 Kelem/s]
+AES GCM - plaintext of 64 bytes/256-bit key decrypt/100 requests
+                        time:   [5.3523 ms 6.3887 ms 7.2690 ms]
+                        thrpt:  [13.757 Kelem/s 15.653 Kelem/s 18.684 Kelem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) low severe
+AES GCM - plaintext of 64 bytes/128-bit key encrypt/500 requests
+                        time:   [18.992 ms 19.865 ms 20.714 ms]
+                        thrpt:  [24.138 Kelem/s 25.169 Kelem/s 26.327 Kelem/s]
+AES GCM - plaintext of 64 bytes/128-bit key decrypt/500 requests
+                        time:   [26.714 ms 26.903 ms 27.210 ms]
+                        thrpt:  [18.376 Kelem/s 18.586 Kelem/s 18.716 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low severe
+  1 (10.00%) high severe
+AES GCM - plaintext of 64 bytes/256-bit key encrypt/500 requests
+                        time:   [22.680 ms 26.575 ms 32.107 ms]
+                        thrpt:  [15.573 Kelem/s 18.815 Kelem/s 22.046 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) low mild
+AES GCM - plaintext of 64 bytes/256-bit key decrypt/500 requests
+                        time:   [12.811 ms 12.849 ms 12.954 ms]
+                        thrpt:  [38.597 Kelem/s 38.913 Kelem/s 39.030 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) high mild
+  1 (10.00%) high severe
+AES GCM - plaintext of 64 bytes/128-bit key encrypt/1000 requests
+                        time:   [26.817 ms 26.841 ms 26.895 ms]
+                        thrpt:  [37.181 Kelem/s 37.256 Kelem/s 37.289 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  2 (20.00%) high severe
+AES GCM - plaintext of 64 bytes/128-bit key decrypt/1000 requests
+                        time:   [25.072 ms 25.115 ms 25.195 ms]
+                        thrpt:  [39.690 Kelem/s 39.817 Kelem/s 39.884 Kelem/s]
+Found 1 outliers among 10 measurements (10.00%)
+  1 (10.00%) high severe
+AES GCM - plaintext of 64 bytes/256-bit key encrypt/1000 requests
+                        time:   [26.772 ms 26.815 ms 26.847 ms]
+                        thrpt:  [37.248 Kelem/s 37.293 Kelem/s 37.352 Kelem/s]
+Found 2 outliers among 10 measurements (20.00%)
+  1 (10.00%) low mild
+  1 (10.00%) high mild
+AES GCM - plaintext of 64 bytes/256-bit key decrypt/1000 requests
+                        time:   [25.164 ms 25.235 ms 25.288 ms]
+                        thrpt:  [39.544 Kelem/s 39.628 Kelem/s 39.740 Kelem/s]
+Found 3 outliers among 10 measurements (30.00%)
+  2 (20.00%) low mild
+  1 (10.00%) high mild
+
+     Running benches/rsa_benches.rs (/home/chenghao/kms/target/release/deps/rsa_benches-9e98ce2157325960)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running benches/symmetric_benches.rs (/home/chenghao/kms/target/release/deps/symmetric_benches-d47d7361e0687d1c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s

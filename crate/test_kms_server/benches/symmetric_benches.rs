@@ -10,6 +10,7 @@
 )]
 use cosmian_kms_client::{
     KmsClient, KmsClientError,
+    cosmian_kmip::time_normalize,
     kmip_0::kmip_types::{BlockCipherMode, CryptographicUsageMask},
     kmip_2_1::{
         extra::BulkData,
@@ -114,6 +115,7 @@ fn create_symmetric_key_request<T: IntoIterator<Item = impl AsRef<str>>>(
         ),
         key_format_type: Some(KeyFormatType::TransparentSymmetricKey),
         object_type: Some(ObjectType::SymmetricKey),
+        activation_date: Some(time_normalize()?),
         ..Attributes::default()
     };
     attributes.set_tags(tags)?;
