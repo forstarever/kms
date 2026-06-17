@@ -21,6 +21,12 @@ pub enum HsmKeyAlgorithm {
 /// Supported key pair algorithms
 pub enum HsmKeypairAlgorithm {
     RSA,
+    MlKem512,
+    MlKem768,
+    MlKem1024,
+    MlDsa44,
+    MlDsa65,
+    MlDsa87,
 }
 
 /// Supported object filters on find
@@ -28,6 +34,12 @@ pub enum HsmKeypairAlgorithm {
 pub enum HsmObjectFilter {
     Any,
     AesKey,
+    MlDsaKey,
+    MlDsaPrivateKey,
+    MlDsaPublicKey,
+    MlKemKey,
+    MlKemPrivateKey,
+    MlKemPublicKey,
     RsaKey,
     RsaPrivateKey,
     RsaPublicKey,
@@ -42,6 +54,12 @@ impl TryFrom<&Attributes> for HsmObjectFilter {
         {
             match cryptographic_algorithm {
                 CryptographicAlgorithm::AES => Self::AesKey,
+                CryptographicAlgorithm::MLDSA_44
+                | CryptographicAlgorithm::MLDSA_65
+                | CryptographicAlgorithm::MLDSA_87 => Self::MlDsaKey,
+                CryptographicAlgorithm::MLKEM_512
+                | CryptographicAlgorithm::MLKEM_768
+                | CryptographicAlgorithm::MLKEM_1024 => Self::MlKemKey,
                 CryptographicAlgorithm::RSA => Self::RsaKey,
                 _ => {
                     return Err(InterfaceError::Default(format!(
@@ -56,9 +74,10 @@ impl TryFrom<&Attributes> for HsmObjectFilter {
         if let Some(object_type) = researched_attributes.object_type {
             object_filter = match object_type {
                 ObjectType::SymmetricKey => {
-                    if object_filter == Self::RsaKey {
+                    if object_filter != Self::Any && object_filter != Self::AesKey {
                         return Err(InterfaceError::Default(
-                            "Incompatible object type: SymmetricKey with RSA".to_owned(),
+                            "Incompatible object type: SymmetricKey with asymmetric algorithm"
+                                .to_owned(),
                         ));
                     }
                     Self::AesKey
@@ -66,18 +85,42 @@ impl TryFrom<&Attributes> for HsmObjectFilter {
                 ObjectType::PublicKey => {
                     if object_filter == Self::AesKey {
                         return Err(InterfaceError::Default(
-                            "Incompatible object type: PublicKey with AES".to_owned(),
+                            "Incompatible object type: PublicKey with symmetric algorithm"
+                                .to_owned(),
                         ));
                     }
-                    Self::RsaPublicKey
+                    match object_filter {
+                        Self::MlDsaKey | Self::MlDsaPublicKey => Self::MlDsaPublicKey,
+                        Self::MlKemKey | Self::MlKemPublicKey => Self::MlKemPublicKey,
+                        Self::RsaKey | Self::RsaPublicKey | Self::Any => Self::RsaPublicKey,
+                        Self::MlDsaPrivateKey | Self::MlKemPrivateKey | Self::RsaPrivateKey => {
+                            return Err(InterfaceError::Default(
+                                "Incompatible object type: PublicKey with private-key filter"
+                                    .to_owned(),
+                            ));
+                        }
+                        Self::AesKey => unreachable!(),
+                    }
                 }
                 ObjectType::PrivateKey => {
                     if object_filter == Self::AesKey {
                         return Err(InterfaceError::Default(
-                            "Incompatible object type: PrivateKey with AES".to_owned(),
+                            "Incompatible object type: PrivateKey with symmetric algorithm"
+                                .to_owned(),
                         ));
                     }
-                    Self::RsaPrivateKey
+                    match object_filter {
+                        Self::MlDsaKey | Self::MlDsaPrivateKey => Self::MlDsaPrivateKey,
+                        Self::MlKemKey | Self::MlKemPrivateKey => Self::MlKemPrivateKey,
+                        Self::RsaKey | Self::RsaPrivateKey | Self::Any => Self::RsaPrivateKey,
+                        Self::MlDsaPublicKey | Self::MlKemPublicKey | Self::RsaPublicKey => {
+                            return Err(InterfaceError::Default(
+                                "Incompatible object type: PrivateKey with public-key filter"
+                                    .to_owned(),
+                            ));
+                        }
+                        Self::AesKey => unreachable!(),
+                    }
                 }
                 _ => {
                     return Err(InterfaceError::Default(format!(
@@ -321,6 +364,16 @@ pub trait HSM: Send + Sync {
         algorithm: SigningAlgorithm,
         data: &[u8],
     ) -> InterfaceResult<Vec<u8>>;
+
+    /// Verify a signature using the given public key in the HSM.
+    async fn signature_verify(
+        &self,
+        slot_id: usize,
+        key_id: &[u8],
+        algorithm: SigningAlgorithm,
+        data: &[u8],
+        signature: &[u8],
+    ) -> InterfaceResult<bool>;
 
     /// Generate cryptographically secure random bytes using the HSM RNG.
     ///

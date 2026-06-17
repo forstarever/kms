@@ -15,6 +15,7 @@ use crate::{
     error::HResultHelper,
     hsm_capabilities::{HsmCapabilities, HsmProvider},
     hsm_lib::HsmLib,
+    session::pqc::CKM_ML_KEM,
 };
 
 pub struct DefaultCapabilityProvider;
@@ -165,6 +166,7 @@ impl<P: HsmProvider> BaseHsm<P> {
             match mechanism {
                 CKM_AES_CBC => algorithms.push(CryptoAlgorithm::AesCbc),
                 CKM_AES_GCM => algorithms.push(CryptoAlgorithm::AesGcm),
+                CKM_ML_KEM => algorithms.push(CryptoAlgorithm::MlKem),
                 CKM_RSA_PKCS => algorithms.push(CryptoAlgorithm::RsaPkcsV15),
                 CKM_RSA_PKCS_OAEP => {
                     if supported_hashes.contains(&CKM_SHA_1) {

@@ -6,7 +6,8 @@ pub use base_hsm::BaseHsm;
 pub use error::{HError, HResult};
 pub use hsm_lib::{HsmLib, Info};
 pub use session::{
-    AesKeySize, HsmEncryptionAlgorithm, HsmSigningAlgorithm, RsaKeySize, RsaOaepDigest, Session,
+    AesKeySize, HsmEncryptionAlgorithm, HsmSigningAlgorithm, PqcKeypairAlgorithm, RsaKeySize,
+    RsaOaepDigest, Session,
 };
 pub use slots::{ObjectHandlesCache, SlotManager};
 

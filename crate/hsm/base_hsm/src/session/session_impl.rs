@@ -45,7 +45,10 @@ use std::{
 use cosmian_kms_interfaces::{
     CryptoAlgorithm, EncryptedContent, HsmObject, HsmObjectFilter, KeyMaterial, KeyMetadata,
     KeyType,
-    KeyType::{AesKey, RsaPrivateKey, RsaPublicKey},
+    KeyType::{
+        AesKey, MlDsaPrivateKey, MlDsaPublicKey, MlKemPrivateKey, MlKemPublicKey, RsaPrivateKey,
+        RsaPublicKey,
+    },
     RsaPrivateKeyMaterial, RsaPublicKeyMaterial, SigningAlgorithm,
 };
 use cosmian_logger::{debug, trace};
@@ -67,7 +70,14 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 pub use crate::session::{aes::AesKeySize, rsa::RsaKeySize};
-use crate::{HError, HResult, ObjectHandlesCache, hsm_call, hsm_capabilities::HsmCapabilities};
+use crate::{
+    HError, HResult, ObjectHandlesCache, hsm_call,
+    hsm_capabilities::HsmCapabilities,
+    session::pqc::{
+        CKA_ML_DSA_PARAMS, CKA_PARAMETER_SET, CKK_ML_DSA, CKK_ML_KEM, CKM_ML_DSA,
+        pqc_key_length_in_bits,
+    },
+};
 
 /// AES block size in bytes
 const AES_BLOCK_SIZE: usize = 16;
@@ -90,6 +100,7 @@ fn generate_random_nonce<const T: usize>() -> HResult<[u8; T]> {
 pub enum HsmEncryptionAlgorithm {
     AesCbc,
     AesGcm,
+    MlKem,
     RsaPkcsV15,
     RsaOaepSha256,
     RsaOaepSha1,
@@ -100,6 +111,7 @@ impl From<CryptoAlgorithm> for HsmEncryptionAlgorithm {
         match algorithm {
             CryptoAlgorithm::AesCbc => Self::AesCbc,
             CryptoAlgorithm::AesGcm => Self::AesGcm,
+            CryptoAlgorithm::MlKem => Self::MlKem,
             CryptoAlgorithm::RsaPkcsV15 => Self::RsaPkcsV15,
             CryptoAlgorithm::RsaOaepSha256 => Self::RsaOaepSha256,
             CryptoAlgorithm::RsaOaepSha1 => Self::RsaOaepSha1,
@@ -110,6 +122,7 @@ impl From<CryptoAlgorithm> for HsmEncryptionAlgorithm {
 /// Signing algorithm supported by the HSM
 #[derive(Debug, Clone, Copy)]
 pub enum HsmSigningAlgorithm {
+    MlDsa,
     RsaPkcsV15,
     Sha1WithRsa,
     Sha256WithRsa,
@@ -120,6 +133,7 @@ pub enum HsmSigningAlgorithm {
 impl From<SigningAlgorithm> for HsmSigningAlgorithm {
     fn from(algorithm: SigningAlgorithm) -> Self {
         match algorithm {
+            SigningAlgorithm::MlDsa => Self::MlDsa,
             SigningAlgorithm::RsaPkcsV15 => Self::RsaPkcsV15,
             SigningAlgorithm::Sha1WithRsa => Self::Sha1WithRsa,
             SigningAlgorithm::Sha256WithRsa => Self::Sha256WithRsa,
@@ -489,18 +503,21 @@ impl Session {
                 };
                 if object_id.ends_with(b"_pk") {
                     // We are looking for a public key. Check if the results contain one.
-                    if object_type == RsaPublicKey {
+                    if matches!(object_type, RsaPublicKey | MlKemPublicKey | MlDsaPublicKey) {
                         if matched_type_count > 0 {
                             let label = std::str::from_utf8(object_id).unwrap_or("<non-utf8>");
                             return Err(HError::Default(format!(
-                                "Multiple RSA public keys with label '{label}' found in the HSM slot. \
+                                "Multiple public keys with label '{label}' found in the HSM slot. \
                                  Labels must be unique per key type."
                             )));
                         }
                         object_handle = handle;
                         matched_type_count += 1;
                     }
-                } else if object_type == AesKey || object_type == RsaPrivateKey {
+                } else if matches!(
+                    object_type,
+                    AesKey | RsaPrivateKey | MlKemPrivateKey | MlDsaPrivateKey
+                ) {
                     if matched_type_count > 0 {
                         let label = std::str::from_utf8(object_id).unwrap_or("<non-utf8>");
                         return Err(HError::Default(format!(
@@ -626,6 +643,84 @@ impl Session {
                     },
                 ]);
             }
+            HsmObjectFilter::MlKemKey => template.extend([CK_ATTRIBUTE {
+                type_: CKA_KEY_TYPE,
+                pValue: std::ptr::from_ref(&CKK_ML_KEM)
+                    .cast::<std::ffi::c_void>()
+                    .cast_mut(),
+                ulValueLen: CK_ULONG::try_from(size_of::<CK_KEY_TYPE>())?,
+            }]),
+            HsmObjectFilter::MlKemPrivateKey => template.extend([
+                CK_ATTRIBUTE {
+                    type_: CKA_CLASS,
+                    pValue: std::ptr::from_ref(&CKO_PRIVATE_KEY)
+                        .cast::<std::ffi::c_void>()
+                        .cast_mut(),
+                    ulValueLen: CK_ULONG::try_from(size_of::<CK_OBJECT_CLASS>())?,
+                },
+                CK_ATTRIBUTE {
+                    type_: CKA_KEY_TYPE,
+                    pValue: std::ptr::from_ref(&CKK_ML_KEM)
+                        .cast::<std::ffi::c_void>()
+                        .cast_mut(),
+                    ulValueLen: CK_ULONG::try_from(size_of::<CK_KEY_TYPE>())?,
+                },
+            ]),
+            HsmObjectFilter::MlKemPublicKey => template.extend([
+                CK_ATTRIBUTE {
+                    type_: CKA_CLASS,
+                    pValue: std::ptr::from_ref(&CKO_PUBLIC_KEY)
+                        .cast::<std::ffi::c_void>()
+                        .cast_mut(),
+                    ulValueLen: CK_ULONG::try_from(size_of::<CK_OBJECT_CLASS>())?,
+                },
+                CK_ATTRIBUTE {
+                    type_: CKA_KEY_TYPE,
+                    pValue: std::ptr::from_ref(&CKK_ML_KEM)
+                        .cast::<std::ffi::c_void>()
+                        .cast_mut(),
+                    ulValueLen: CK_ULONG::try_from(size_of::<CK_KEY_TYPE>())?,
+                },
+            ]),
+            HsmObjectFilter::MlDsaKey => template.extend([CK_ATTRIBUTE {
+                type_: CKA_KEY_TYPE,
+                pValue: std::ptr::from_ref(&CKK_ML_DSA)
+                    .cast::<std::ffi::c_void>()
+                    .cast_mut(),
+                ulValueLen: CK_ULONG::try_from(size_of::<CK_KEY_TYPE>())?,
+            }]),
+            HsmObjectFilter::MlDsaPrivateKey => template.extend([
+                CK_ATTRIBUTE {
+                    type_: CKA_CLASS,
+                    pValue: std::ptr::from_ref(&CKO_PRIVATE_KEY)
+                        .cast::<std::ffi::c_void>()
+                        .cast_mut(),
+                    ulValueLen: CK_ULONG::try_from(size_of::<CK_OBJECT_CLASS>())?,
+                },
+                CK_ATTRIBUTE {
+                    type_: CKA_KEY_TYPE,
+                    pValue: std::ptr::from_ref(&CKK_ML_DSA)
+                        .cast::<std::ffi::c_void>()
+                        .cast_mut(),
+                    ulValueLen: CK_ULONG::try_from(size_of::<CK_KEY_TYPE>())?,
+                },
+            ]),
+            HsmObjectFilter::MlDsaPublicKey => template.extend([
+                CK_ATTRIBUTE {
+                    type_: CKA_CLASS,
+                    pValue: std::ptr::from_ref(&CKO_PUBLIC_KEY)
+                        .cast::<std::ffi::c_void>()
+                        .cast_mut(),
+                    ulValueLen: CK_ULONG::try_from(size_of::<CK_OBJECT_CLASS>())?,
+                },
+                CK_ATTRIBUTE {
+                    type_: CKA_KEY_TYPE,
+                    pValue: std::ptr::from_ref(&CKK_ML_DSA)
+                        .cast::<std::ffi::c_void>()
+                        .cast_mut(),
+                    ulValueLen: CK_ULONG::try_from(size_of::<CK_KEY_TYPE>())?,
+                },
+            ]),
             HsmObjectFilter::RsaKey => template.extend([CK_ATTRIBUTE {
                 type_: CKA_KEY_TYPE,
                 pValue: std::ptr::from_ref(&CKK_RSA)
@@ -786,6 +881,14 @@ impl Session {
         plaintext: &[u8],
     ) -> HResult<EncryptedContent> {
         Ok(match &algorithm {
+            HsmEncryptionAlgorithm::MlKem => {
+                let (shared_secret, ciphertext) = self.mlkem_encapsulate(key_handle)?;
+                EncryptedContent {
+                    ciphertext: shared_secret.to_vec(),
+                    iv: Some(ciphertext),
+                    tag: None,
+                }
+            }
             HsmEncryptionAlgorithm::AesGcm => {
                 let mut nonce = generate_random_nonce::<12>()?;
                 let mut params = CK_AES_GCM_PARAMS {
@@ -919,6 +1022,7 @@ impl Session {
         ciphertext: &[u8],
     ) -> HResult<Zeroizing<Vec<u8>>> {
         match &algorithm {
+            HsmEncryptionAlgorithm::MlKem => self.mlkem_decapsulate(key_handle, ciphertext),
             HsmEncryptionAlgorithm::AesGcm => {
                 if ciphertext.len() < AES_GCM_IV_LENGTH {
                     return Err(HError::Default("Invalid AES GCM ciphertext".to_owned()));
@@ -1318,6 +1422,7 @@ impl Session {
         data: &[u8],
     ) -> HResult<Vec<u8>> {
         let mechanism_type = match algorithm {
+            HsmSigningAlgorithm::MlDsa => CKM_ML_DSA,
             HsmSigningAlgorithm::RsaPkcsV15 => CKM_RSA_PKCS,
             HsmSigningAlgorithm::Sha1WithRsa => CKM_SHA1_RSA_PKCS,
             HsmSigningAlgorithm::Sha256WithRsa => CKM_SHA256_RSA_PKCS,
@@ -1332,7 +1437,22 @@ impl Session {
         self.sign_with_mechanism(key_handle, &mut mechanism, data)
     }
 
-    fn sign_with_mechanism(
+    pub(crate) fn signature_verify(
+        &self,
+        key_handle: CK_OBJECT_HANDLE,
+        algorithm: HsmSigningAlgorithm,
+        data: &[u8],
+        signature: &[u8],
+    ) -> HResult<bool> {
+        match algorithm {
+            HsmSigningAlgorithm::MlDsa => self.mldsa_verify(key_handle, data, signature),
+            _ => Err(HError::Default(format!(
+                "Signature verification with {algorithm:?} is not supported by base_hsm"
+            ))),
+        }
+    }
+
+    pub(crate) fn sign_with_mechanism(
         &self,
         key_handle: CK_OBJECT_HANDLE,
         mechanism: &mut CK_MECHANISM,
@@ -1401,6 +1521,20 @@ impl Session {
         self.call_get_attributes(key_handle, &mut template)?;
         let object_type = match key_type {
             CKK_AES => KeyType::AesKey,
+            CKK_ML_KEM => {
+                if class == CKO_PRIVATE_KEY {
+                    KeyType::MlKemPrivateKey
+                } else {
+                    KeyType::MlKemPublicKey
+                }
+            }
+            CKK_ML_DSA => {
+                if class == CKO_PRIVATE_KEY {
+                    KeyType::MlDsaPrivateKey
+                } else {
+                    KeyType::MlDsaPublicKey
+                }
+            }
             CKK_RSA => {
                 if class == CKO_PRIVATE_KEY {
                     KeyType::RsaPrivateKey
@@ -1417,6 +1551,12 @@ impl Session {
 
         match object_type {
             KeyType::AesKey => self.export_aes_key(key_handle),
+            KeyType::MlKemPrivateKey
+            | KeyType::MlKemPublicKey
+            | KeyType::MlDsaPrivateKey
+            | KeyType::MlDsaPublicKey => Err(HError::Default(
+                "PQC key export from HSM is not supported".to_owned(),
+            )),
             KeyType::RsaPrivateKey => self.export_rsa_private_key(key_handle),
             KeyType::RsaPublicKey => self.export_rsa_public_key(key_handle),
         }
@@ -1690,7 +1830,7 @@ impl Session {
         )))
     }
 
-    fn call_get_attributes(
+    pub(crate) fn call_get_attributes(
         &self,
         key_handle: CK_OBJECT_HANDLE,
         template: &mut [CK_ATTRIBUTE],
@@ -1863,6 +2003,79 @@ impl Session {
                     id: label,
                 }))
             }
+            KeyType::MlKemPrivateKey
+            | KeyType::MlKemPublicKey
+            | KeyType::MlDsaPrivateKey
+            | KeyType::MlDsaPublicKey => {
+                let attr_type = match key_type {
+                    KeyType::MlKemPrivateKey | KeyType::MlKemPublicKey => CKA_PARAMETER_SET,
+                    KeyType::MlDsaPrivateKey | KeyType::MlDsaPublicKey => CKA_ML_DSA_PARAMS,
+                    _ => unreachable!(),
+                };
+                let key_type_raw = match key_type {
+                    KeyType::MlKemPrivateKey | KeyType::MlKemPublicKey => CKK_ML_KEM,
+                    KeyType::MlDsaPrivateKey | KeyType::MlDsaPublicKey => CKK_ML_DSA,
+                    _ => unreachable!(),
+                };
+                let mut parameter_set = CK_ULONG::default();
+                let mut sensitive: CK_BBOOL = CK_FALSE;
+                template.push(CK_ATTRIBUTE {
+                    type_: attr_type,
+                    pValue: (&raw mut parameter_set).cast::<std::ffi::c_void>(),
+                    ulValueLen: CK_ULONG::try_from(size_of::<CK_ULONG>())?,
+                });
+                if matches!(
+                    key_type,
+                    KeyType::MlKemPrivateKey | KeyType::MlDsaPrivateKey
+                ) {
+                    template.push(CK_ATTRIBUTE {
+                        type_: CKA_SENSITIVE,
+                        pValue: (&raw mut sensitive).cast::<std::ffi::c_void>(),
+                        ulValueLen: CK_ULONG::try_from(size_of::<CK_BBOOL>())?,
+                    });
+                }
+                if self
+                    .call_get_attributes(key_handle, &mut template)?
+                    .is_none()
+                {
+                    return Ok(None);
+                }
+                let label_len = template
+                    .first()
+                    .ok_or_else(|| HError::Default("Failed to get label length".to_owned()))?
+                    .ulValueLen;
+                let label = if label_len == 0 {
+                    String::new()
+                } else {
+                    let mut label_bytes: Vec<u8> = vec![0_u8; usize::try_from(label_len)?];
+                    let mut template = [CK_ATTRIBUTE {
+                        type_: CKA_LABEL,
+                        pValue: label_bytes.as_mut_ptr().cast::<std::ffi::c_void>(),
+                        ulValueLen: label_len,
+                    }];
+                    if self
+                        .call_get_attributes(key_handle, &mut template)?
+                        .is_none()
+                    {
+                        return Ok(None);
+                    }
+                    String::from_utf8(label_bytes).map_err(|e| {
+                        HError::Default(format!("Failed to convert label to string: {e}"))
+                    })?
+                };
+                let mut id = label.trim().to_owned();
+                if matches!(key_type, KeyType::MlKemPublicKey | KeyType::MlDsaPublicKey)
+                    && !id.ends_with("_pk")
+                {
+                    id = id.add("_pk");
+                }
+                Ok(Some(KeyMetadata {
+                    key_type,
+                    key_length_in_bits: pqc_key_length_in_bits(key_type_raw, parameter_set)?,
+                    sensitive: sensitive == CK_TRUE,
+                    id,
+                }))
+            }
         }
     }
 
@@ -1895,6 +2108,20 @@ impl Session {
         }
         let key_type = match key_type {
             CKK_AES => KeyType::AesKey,
+            CKK_ML_KEM => {
+                if class == CKO_PRIVATE_KEY {
+                    KeyType::MlKemPrivateKey
+                } else {
+                    KeyType::MlKemPublicKey
+                }
+            }
+            CKK_ML_DSA => {
+                if class == CKO_PRIVATE_KEY {
+                    KeyType::MlDsaPrivateKey
+                } else {
+                    KeyType::MlDsaPublicKey
+                }
+            }
             CKK_RSA => {
                 if class == CKO_PRIVATE_KEY {
                     KeyType::RsaPrivateKey
@@ -1957,7 +2184,10 @@ impl Session {
             // When read via CKA_LABEL, append _pk for RSA public keys lacking the suffix.
             // (When read via CKA_ID, KMS already stored the _pk suffix in the id.)
             if attr_type == CKA_LABEL
-                && self.get_key_type(object_handle)? == Some(KeyType::RsaPublicKey)
+                && matches!(
+                    self.get_key_type(object_handle)?,
+                    Some(KeyType::RsaPublicKey | KeyType::MlKemPublicKey | KeyType::MlDsaPublicKey)
+                )
                 && !id.ends_with(b"_pk")
             {
                 id.extend_from_slice(b"_pk");

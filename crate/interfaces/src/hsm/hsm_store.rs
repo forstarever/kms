@@ -221,8 +221,10 @@ impl ObjectsStore for HsmStore {
         user: &str,
         operations: &[AtomicOperation],
     ) -> InterfaceResult<Vec<String>> {
-        if let Some((uid, _object, attributes, _tags)) = is_rsa_keypair_creation(operations) {
-            debug!("Creating RSA keypair with uid: {uid}");
+        if let Some((uid, _object, attributes, _tags, keypair_algorithm)) =
+            is_hsm_keypair_creation(operations)
+        {
+            debug!("Creating HSM keypair with uid: {uid}");
             if !self.is_admin(user) {
                 return Err(InterfaceError::Unauthorized(
                     "Only the HSM Admin can create HSM keypairs".to_owned(),
@@ -235,7 +237,7 @@ impl ObjectsStore for HsmStore {
                     slot_id,
                     sk_id.as_bytes(),
                     pk_id.as_bytes(),
-                    HsmKeypairAlgorithm::RSA,
+                    keypair_algorithm,
                     usize::try_from(attributes.cryptographic_length.unwrap_or(2048)).map_err(
                         |e| InterfaceError::InvalidRequest(format!("Invalid key length: {e}")),
                     )?,
@@ -265,7 +267,8 @@ impl ObjectsStore for HsmStore {
         }
 
         Err(InterfaceError::InvalidRequest(
-            "HSM atomic operations only support RSA keypair creations for now".to_owned(),
+            "HSM atomic operations only support RSA, ML-KEM and ML-DSA keypair creations for now"
+                .to_owned(),
         ))
     }
 
@@ -411,6 +414,30 @@ impl CryptoOracle for HsmStore {
                 }
                 Some(key_type) => match key_type {
                     KeyType::AesKey => CryptoAlgorithm::get_aes_algorithm(&supported_algorithms)?,
+                    KeyType::MlKemPublicKey => CryptoAlgorithm::MlKem,
+                    KeyType::MlKemPrivateKey => {
+                        let pk_uid = format!("{uid}_pk");
+                        debug!(
+                            "encrypt: an ML-KEM private key {uid} was specified. Trying to use \
+                             public key {pk_uid} for encapsulation"
+                        );
+                        (slot_id, key_id) = parse_uid_with_prefix(&pk_uid, &self.prefix)?;
+                        self.hsm
+                            .get_key_type(slot_id, key_id.as_bytes())
+                            .await?
+                            .ok_or_else(|| {
+                                InterfaceError::InvalidRequest(format!(
+                                    "The key {uid} is an ML-KEM private key, but no public key \
+                                     {pk_uid} is available"
+                                ))
+                            })?;
+                        CryptoAlgorithm::MlKem
+                    }
+                    KeyType::MlDsaPrivateKey | KeyType::MlDsaPublicKey => {
+                        return Err(InterfaceError::InvalidRequest(
+                            "ML-DSA keys cannot be used for encryption/encapsulation".to_owned(),
+                        ));
+                    }
                     KeyType::RsaPublicKey => {
                         CryptoAlgorithm::get_rsa_algorithm(&supported_algorithms)?
                     }
@@ -467,6 +494,17 @@ impl CryptoOracle for HsmStore {
                 }
                 Some(key_type) => match key_type {
                     KeyType::AesKey => CryptoAlgorithm::get_aes_algorithm(&supported_algorithms)?,
+                    KeyType::MlKemPrivateKey => CryptoAlgorithm::MlKem,
+                    KeyType::MlKemPublicKey => {
+                        return Err(InterfaceError::Default(
+                            "An ML-KEM public key cannot be used to decapsulate".to_owned(),
+                        ));
+                    }
+                    KeyType::MlDsaPrivateKey | KeyType::MlDsaPublicKey => {
+                        return Err(InterfaceError::InvalidRequest(
+                            "ML-DSA keys cannot be used for decryption/decapsulation".to_owned(),
+                        ));
+                    }
                     KeyType::RsaPrivateKey => {
                         CryptoAlgorithm::get_rsa_algorithm(&supported_algorithms)?
                     }
@@ -503,11 +541,11 @@ impl CryptoOracle for HsmStore {
     ) -> InterfaceResult<Vec<u8>> {
         let (slot_id, key_id) = parse_uid_with_prefix(uid, &self.prefix)?;
         let key_type = self.hsm.get_key_type(slot_id, key_id.as_bytes()).await?;
-        match key_type {
-            Some(KeyType::RsaPrivateKey) => {}
+        let signing_key_type = match key_type {
+            Some(key_type @ (KeyType::RsaPrivateKey | KeyType::MlDsaPrivateKey)) => key_type,
             Some(other) => {
                 return Err(InterfaceError::InvalidRequest(format!(
-                    "Sign: key {uid} is a {other:?}, expected an RSA private key"
+                    "Sign: key {uid} is a {other:?}, expected an RSA or ML-DSA private key"
                 )));
             }
             None => {
@@ -515,8 +553,13 @@ impl CryptoOracle for HsmStore {
                     "Sign: key {uid} not found on the HSM"
                 )));
             }
-        }
-        let algorithm = SigningAlgorithm::from_kmip(cryptographic_parameters)?;
+        };
+        let algorithm =
+            if signing_key_type == KeyType::MlDsaPrivateKey && cryptographic_parameters.is_none() {
+                SigningAlgorithm::MlDsa
+            } else {
+                SigningAlgorithm::from_kmip(cryptographic_parameters)?
+            };
         debug!("sign: using algorithm {algorithm:?} for key {uid}");
         self.hsm
             .sign(slot_id, key_id.as_bytes(), algorithm, data)
@@ -526,15 +569,58 @@ impl CryptoOracle for HsmStore {
     async fn signature_verify(
         &self,
         uid: &str,
-        _data: &[u8],
-        _signature: &[u8],
-        _cryptographic_parameters: Option<
+        data: &[u8],
+        signature: &[u8],
+        cryptographic_parameters: Option<
             &cosmian_kmip::kmip_2_1::kmip_types::CryptographicParameters,
         >,
     ) -> InterfaceResult<bool> {
-        Err(InterfaceError::NotSupported(format!(
-            "SignatureVerify via HSM is not yet implemented for key: {uid}"
-        )))
+        let (mut slot_id, mut key_id) = parse_uid_with_prefix(uid, &self.prefix)?;
+        let key_type = self.hsm.get_key_type(slot_id, key_id.as_bytes()).await?;
+        match key_type {
+            Some(KeyType::MlDsaPublicKey) => {}
+            Some(KeyType::MlDsaPrivateKey) => {
+                let pk_uid = format!("{uid}_pk");
+                debug!(
+                    "signature_verify: an ML-DSA private key {uid} was specified. Trying to use \
+                     public key {pk_uid}"
+                );
+                (slot_id, key_id) = parse_uid_with_prefix(&pk_uid, &self.prefix)?;
+                match self.hsm.get_key_type(slot_id, key_id.as_bytes()).await? {
+                    Some(KeyType::MlDsaPublicKey) => {}
+                    Some(other) => {
+                        return Err(InterfaceError::InvalidRequest(format!(
+                            "SignatureVerify: public key {pk_uid} is a {other:?}, expected an \
+                             ML-DSA public key"
+                        )));
+                    }
+                    None => {
+                        return Err(InterfaceError::InvalidRequest(format!(
+                            "SignatureVerify: public key {pk_uid} not found on the HSM"
+                        )));
+                    }
+                }
+            }
+            Some(other) => {
+                return Err(InterfaceError::InvalidRequest(format!(
+                    "SignatureVerify: key {uid} is a {other:?}, expected an ML-DSA public key"
+                )));
+            }
+            None => {
+                return Err(InterfaceError::InvalidRequest(format!(
+                    "SignatureVerify: key {uid} not found on the HSM"
+                )));
+            }
+        }
+        let algorithm = if cryptographic_parameters.is_none() {
+            SigningAlgorithm::MlDsa
+        } else {
+            SigningAlgorithm::from_kmip(cryptographic_parameters)?
+        };
+        debug!("signature_verify: using algorithm {algorithm:?} for key {uid}");
+        self.hsm
+            .signature_verify(slot_id, key_id.as_bytes(), algorithm, data, signature)
+            .await
     }
 
     async fn mac(
@@ -603,6 +689,34 @@ fn build_sensitive_stub_attributes(meta: &KeyMetadata) -> Attributes {
                 | CryptographicUsageMask::Verify,
             KeyFormatType::PKCS1,
         ),
+        KeyType::MlKemPrivateKey => (
+            mlkem_algorithm_from_length(meta.key_length_in_bits),
+            ObjectType::PrivateKey,
+            CryptographicUsageMask::Decrypt
+                | CryptographicUsageMask::UnwrapKey
+                | CryptographicUsageMask::KeyAgreement,
+            KeyFormatType::PKCS8,
+        ),
+        KeyType::MlKemPublicKey => (
+            mlkem_algorithm_from_length(meta.key_length_in_bits),
+            ObjectType::PublicKey,
+            CryptographicUsageMask::Encrypt
+                | CryptographicUsageMask::WrapKey
+                | CryptographicUsageMask::KeyAgreement,
+            KeyFormatType::PKCS8,
+        ),
+        KeyType::MlDsaPrivateKey => (
+            mldsa_algorithm_from_length(meta.key_length_in_bits),
+            ObjectType::PrivateKey,
+            CryptographicUsageMask::Sign,
+            KeyFormatType::PKCS8,
+        ),
+        KeyType::MlDsaPublicKey => (
+            mldsa_algorithm_from_length(meta.key_length_in_bits),
+            ObjectType::PublicKey,
+            CryptographicUsageMask::Verify,
+            KeyFormatType::PKCS8,
+        ),
     };
     Attributes {
         cryptographic_algorithm: Some(algorithm),
@@ -650,14 +764,34 @@ fn build_sensitive_stub_object(meta: &KeyMetadata) -> Object {
         // For RSA sensitive keys (unusual but possible), build a minimal SymmetricKey-shaped
         // stub so callers can still perform attribute-only operations.  The object_type in
         // the attributes is set correctly (PrivateKey / PublicKey).
-        KeyType::RsaPrivateKey | KeyType::RsaPublicKey => {
+        KeyType::RsaPrivateKey
+        | KeyType::RsaPublicKey
+        | KeyType::MlKemPrivateKey
+        | KeyType::MlKemPublicKey
+        | KeyType::MlDsaPrivateKey
+        | KeyType::MlDsaPublicKey => {
             let obj_type = if meta.key_type == KeyType::RsaPrivateKey {
+                ObjectType::PrivateKey
+            } else if matches!(
+                meta.key_type,
+                KeyType::MlKemPrivateKey | KeyType::MlDsaPrivateKey
+            ) {
                 ObjectType::PrivateKey
             } else {
                 ObjectType::PublicKey
             };
+            let algorithm = match meta.key_type {
+                KeyType::RsaPrivateKey | KeyType::RsaPublicKey => CryptographicAlgorithm::RSA,
+                KeyType::MlKemPrivateKey | KeyType::MlKemPublicKey => {
+                    mlkem_algorithm_from_length(meta.key_length_in_bits)
+                }
+                KeyType::MlDsaPrivateKey | KeyType::MlDsaPublicKey => {
+                    mldsa_algorithm_from_length(meta.key_length_in_bits)
+                }
+                KeyType::AesKey => unreachable!(),
+            };
             let attributes = Attributes {
-                cryptographic_algorithm: Some(CryptographicAlgorithm::RSA),
+                cryptographic_algorithm: Some(algorithm),
                 cryptographic_length: Some(length),
                 object_type: Some(obj_type),
                 sensitive: Some(true),
@@ -675,7 +809,7 @@ fn build_sensitive_stub_object(meta: &KeyMetadata) -> Object {
                         },
                         attributes: Some(attributes),
                     }),
-                    cryptographic_algorithm: Some(CryptographicAlgorithm::RSA),
+                    cryptographic_algorithm: Some(algorithm),
                     cryptographic_length: Some(length),
                     key_wrapping_data: None,
                 },
@@ -704,6 +838,30 @@ fn build_find_attributes(meta: &Option<KeyMetadata>, filter: &HsmObjectFilter) -
                 attrs.object_type = Some(ObjectType::PublicKey);
                 attrs.key_format_type = Some(KeyFormatType::PKCS1);
             }
+            KeyType::MlKemPrivateKey => {
+                attrs.cryptographic_algorithm =
+                    Some(mlkem_algorithm_from_length(m.key_length_in_bits));
+                attrs.object_type = Some(ObjectType::PrivateKey);
+                attrs.key_format_type = Some(KeyFormatType::PKCS8);
+            }
+            KeyType::MlKemPublicKey => {
+                attrs.cryptographic_algorithm =
+                    Some(mlkem_algorithm_from_length(m.key_length_in_bits));
+                attrs.object_type = Some(ObjectType::PublicKey);
+                attrs.key_format_type = Some(KeyFormatType::PKCS8);
+            }
+            KeyType::MlDsaPrivateKey => {
+                attrs.cryptographic_algorithm =
+                    Some(mldsa_algorithm_from_length(m.key_length_in_bits));
+                attrs.object_type = Some(ObjectType::PrivateKey);
+                attrs.key_format_type = Some(KeyFormatType::PKCS8);
+            }
+            KeyType::MlDsaPublicKey => {
+                attrs.cryptographic_algorithm =
+                    Some(mldsa_algorithm_from_length(m.key_length_in_bits));
+                attrs.object_type = Some(ObjectType::PublicKey);
+                attrs.key_format_type = Some(KeyFormatType::PKCS8);
+            }
         }
     } else {
         // No metadata available — infer from the filter
@@ -726,10 +884,44 @@ fn build_find_attributes(meta: &Option<KeyMetadata>, filter: &HsmObjectFilter) -
                 attrs.object_type = Some(ObjectType::PublicKey);
                 attrs.key_format_type = Some(KeyFormatType::PKCS1);
             }
+            HsmObjectFilter::MlKemKey => {}
+            HsmObjectFilter::MlKemPrivateKey => {
+                attrs.object_type = Some(ObjectType::PrivateKey);
+                attrs.key_format_type = Some(KeyFormatType::PKCS8);
+            }
+            HsmObjectFilter::MlKemPublicKey => {
+                attrs.object_type = Some(ObjectType::PublicKey);
+                attrs.key_format_type = Some(KeyFormatType::PKCS8);
+            }
+            HsmObjectFilter::MlDsaKey => {}
+            HsmObjectFilter::MlDsaPrivateKey => {
+                attrs.object_type = Some(ObjectType::PrivateKey);
+                attrs.key_format_type = Some(KeyFormatType::PKCS8);
+            }
+            HsmObjectFilter::MlDsaPublicKey => {
+                attrs.object_type = Some(ObjectType::PublicKey);
+                attrs.key_format_type = Some(KeyFormatType::PKCS8);
+            }
             HsmObjectFilter::Any => {}
         }
     }
     attrs
+}
+
+fn mlkem_algorithm_from_length(length_in_bits: usize) -> CryptographicAlgorithm {
+    match length_in_bits {
+        512 => CryptographicAlgorithm::MLKEM_512,
+        1024 => CryptographicAlgorithm::MLKEM_1024,
+        _ => CryptographicAlgorithm::MLKEM_768,
+    }
+}
+
+fn mldsa_algorithm_from_length(length_in_bits: usize) -> CryptographicAlgorithm {
+    match length_in_bits {
+        44 => CryptographicAlgorithm::MLDSA_44,
+        87 => CryptographicAlgorithm::MLDSA_87,
+        _ => CryptographicAlgorithm::MLDSA_65,
+    }
 }
 
 fn check_basic_compatibility(
@@ -858,7 +1050,7 @@ fn check_basic_compatibility(
     Ok(())
 }
 
-/// The creation of RSA key pairs is done via 2 atomic operations,
+/// The creation of asymmetric key pairs is done via 2 atomic operations,
 /// one to create the private key and one to generate the public key.
 /// All the information we need is contained in the atomic operation
 /// to create the private key, so we recover it here
@@ -867,26 +1059,37 @@ fn check_basic_compatibility(
 /// - the UID of the private key
 /// - the object of the private key
 /// - the attributes of the private key
-fn is_rsa_keypair_creation(
+/// - the HSM keypair algorithm
+fn is_hsm_keypair_creation(
     operations: &[AtomicOperation],
-) -> Option<(String, Object, Attributes, HashSet<String>)> {
+) -> Option<(
+    String,
+    Object,
+    Attributes,
+    HashSet<String>,
+    HsmKeypairAlgorithm,
+)> {
     operations.iter().find_map(|op| match op {
         AtomicOperation::Create((uid, object, attributes, tags)) => {
             if object.object_type() != ObjectType::PrivateKey {
                 return None;
             }
-            if !attributes
-                .cryptographic_algorithm
-                .as_ref()
-                .is_some_and(|algorithm| *algorithm == CryptographicAlgorithm::RSA)
-            {
-                return None;
-            }
+            let keypair_algorithm = match attributes.cryptographic_algorithm? {
+                CryptographicAlgorithm::RSA => HsmKeypairAlgorithm::RSA,
+                CryptographicAlgorithm::MLKEM_512 => HsmKeypairAlgorithm::MlKem512,
+                CryptographicAlgorithm::MLKEM_768 => HsmKeypairAlgorithm::MlKem768,
+                CryptographicAlgorithm::MLKEM_1024 => HsmKeypairAlgorithm::MlKem1024,
+                CryptographicAlgorithm::MLDSA_44 => HsmKeypairAlgorithm::MlDsa44,
+                CryptographicAlgorithm::MLDSA_65 => HsmKeypairAlgorithm::MlDsa65,
+                CryptographicAlgorithm::MLDSA_87 => HsmKeypairAlgorithm::MlDsa87,
+                _ => return None,
+            };
             Some((
                 uid.clone(),
                 object.clone(),
                 attributes.clone(),
                 tags.clone(),
+                keypair_algorithm,
             ))
         }
         _ => None,

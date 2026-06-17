@@ -39,7 +39,7 @@ use cosmian_kms_interfaces::{
 use cosmian_logger::debug;
 use zeroize::Zeroizing;
 
-use crate::{AesKeySize, BaseHsm, RsaKeySize, hsm_capabilities::HsmProvider};
+use crate::{AesKeySize, BaseHsm, PqcKeypairAlgorithm, RsaKeySize, hsm_capabilities::HsmProvider};
 
 #[async_trait]
 impl<P: HsmProvider> HSM for BaseHsm<P> {
@@ -111,22 +111,75 @@ impl<P: HsmProvider> HSM for BaseHsm<P> {
             ));
         }
 
-        let key_length_in_bits = match key_length_in_bits {
-            1024 => RsaKeySize::Rsa1024,
-            2048 => RsaKeySize::Rsa2048,
-            3072 => RsaKeySize::Rsa3072,
-            4096 => RsaKeySize::Rsa4096,
-            x => {
-                return Err(InterfaceError::Default(format!(
-                    "Invalid key length: {x} bits, for and HSM RSA key (valid values are 1024, \
-                     2048, 3072, 4096)"
-                )));
-            }
-        };
-
         match algorithm {
             HsmKeypairAlgorithm::RSA => {
+                let key_length_in_bits = match key_length_in_bits {
+                    1024 => RsaKeySize::Rsa1024,
+                    2048 => RsaKeySize::Rsa2048,
+                    3072 => RsaKeySize::Rsa3072,
+                    4096 => RsaKeySize::Rsa4096,
+                    x => {
+                        return Err(InterfaceError::Default(format!(
+                            "Invalid key length: {x} bits, for and HSM RSA key (valid values are \
+                             1024, 2048, 3072, 4096)"
+                        )));
+                    }
+                };
                 session.generate_rsa_key_pair(sk_id, pk_id, key_length_in_bits, sensitive)?;
+                Ok(())
+            }
+            HsmKeypairAlgorithm::MlKem512 => {
+                session.generate_pqc_key_pair(
+                    sk_id,
+                    pk_id,
+                    PqcKeypairAlgorithm::MlKem512,
+                    sensitive,
+                )?;
+                Ok(())
+            }
+            HsmKeypairAlgorithm::MlKem768 => {
+                session.generate_pqc_key_pair(
+                    sk_id,
+                    pk_id,
+                    PqcKeypairAlgorithm::MlKem768,
+                    sensitive,
+                )?;
+                Ok(())
+            }
+            HsmKeypairAlgorithm::MlKem1024 => {
+                session.generate_pqc_key_pair(
+                    sk_id,
+                    pk_id,
+                    PqcKeypairAlgorithm::MlKem1024,
+                    sensitive,
+                )?;
+                Ok(())
+            }
+            HsmKeypairAlgorithm::MlDsa44 => {
+                session.generate_pqc_key_pair(
+                    sk_id,
+                    pk_id,
+                    PqcKeypairAlgorithm::MlDsa44,
+                    sensitive,
+                )?;
+                Ok(())
+            }
+            HsmKeypairAlgorithm::MlDsa65 => {
+                session.generate_pqc_key_pair(
+                    sk_id,
+                    pk_id,
+                    PqcKeypairAlgorithm::MlDsa65,
+                    sensitive,
+                )?;
+                Ok(())
+            }
+            HsmKeypairAlgorithm::MlDsa87 => {
+                session.generate_pqc_key_pair(
+                    sk_id,
+                    pk_id,
+                    PqcKeypairAlgorithm::MlDsa87,
+                    sensitive,
+                )?;
                 Ok(())
             }
         }
@@ -213,6 +266,21 @@ impl<P: HsmProvider> HSM for BaseHsm<P> {
         let handle = session.get_object_handle(key_id)?;
         let signature = session.sign(handle, algorithm.into(), data)?;
         Ok(signature)
+    }
+
+    async fn signature_verify(
+        &self,
+        slot_id: usize,
+        key_id: &[u8],
+        algorithm: SigningAlgorithm,
+        data: &[u8],
+        signature: &[u8],
+    ) -> InterfaceResult<bool> {
+        let slot = self.get_slot(slot_id)?;
+        let session = slot.open_session(true)?;
+        let handle = session.get_object_handle(key_id)?;
+        let verified = session.signature_verify(handle, algorithm.into(), data, signature)?;
+        Ok(verified)
     }
 
     async fn get_key_type(

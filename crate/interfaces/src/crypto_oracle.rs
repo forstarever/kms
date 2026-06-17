@@ -27,6 +27,7 @@ pub struct KeyMetadata {
 pub enum CryptoAlgorithm {
     AesCbc,
     AesGcm,
+    MlKem,
     RsaPkcsV15,
     RsaOaepSha256,
     RsaOaepSha1,
@@ -63,6 +64,11 @@ impl CryptoAlgorithm {
                             ))),
                         }
                     }),
+                cosmian_kmip::kmip_2_1::kmip_types::CryptographicAlgorithm::MLKEM_512
+                | cosmian_kmip::kmip_2_1::kmip_types::CryptographicAlgorithm::MLKEM_768
+                | cosmian_kmip::kmip_2_1::kmip_types::CryptographicAlgorithm::MLKEM_1024 => {
+                    Ok(Some(Self::MlKem))
+                }
                 x => Err(InterfaceError::Default(format!(
                     "Cryptographic algorithm: {x:?} not supported",
                 ))),
@@ -110,6 +116,8 @@ impl CryptoAlgorithm {
 /// Each variant maps directly to a PKCS#11 signing mechanism.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SigningAlgorithm {
+    /// `CKM_ML_DSA`
+    MlDsa,
     /// `CKM_RSA_PKCS` (raw PKCS#1 v1.5 — caller hashes)
     RsaPkcsV15,
     /// `CKM_SHA1_RSA_PKCS`
@@ -146,6 +154,17 @@ impl SigningAlgorithm {
                     "Unsupported digital signature algorithm for HSM signing: {other:?}"
                 ))),
             };
+        }
+
+        if matches!(
+            params.cryptographic_algorithm,
+            Some(
+                CryptographicAlgorithm::MLDSA_44
+                    | CryptographicAlgorithm::MLDSA_65
+                    | CryptographicAlgorithm::MLDSA_87
+            )
+        ) {
+            return Ok(Self::MlDsa);
         }
 
         // 2. cryptographic_algorithm + hashing_algorithm

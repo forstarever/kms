@@ -11,8 +11,11 @@ use cosmian_kms_client::{
 };
 
 use crate::{
-    actions::console,
-    error::result::{KmsCliResult, KmsCliResultHelper},
+    actions::{console, labels::KEY_ID},
+    error::{
+        KmsCliError,
+        result::{KmsCliResult, KmsCliResultHelper},
+    },
 };
 
 /// The PQC algorithm to use for key pair generation.
@@ -149,6 +152,11 @@ pub struct CreatePqcKeyPairAction {
     #[clap(long = "tag", short = 't', value_name = "TAG")]
     pub(crate) tags: Vec<String>,
 
+    /// The private key unique identifier.
+    /// Use an HSM UID such as hsm::softhsm2::<slot>::<id> to create the key pair in the HSM.
+    #[clap(long = KEY_ID, short = 'k')]
+    pub(crate) key_id: Option<String>,
+
     /// Sensitive: if set, the private key will not be exportable
     #[clap(long = "sensitive", default_value = "false")]
     pub(crate) sensitive: bool,
@@ -161,7 +169,13 @@ impl CreatePqcKeyPairAction {
     ) -> KmsCliResult<(UniqueIdentifier, UniqueIdentifier)> {
         let vendor_id = kms_rest_client.config.vendor_id.as_str();
 
-        let request = if let Some(kem_algorithm) = self.algorithm.to_kem_algorithm() {
+        let mut request = if let Some(kem_algorithm) = self.algorithm.to_kem_algorithm() {
+            if self.key_id.is_some() {
+                return Err(KmsCliError::NotSupported(
+                    "HSM key ids are only supported for standard ML-KEM and ML-DSA key pairs"
+                        .to_owned(),
+                ));
+            }
             build_create_configurable_kem_keypair_request(
                 vendor_id,
                 None,
@@ -178,6 +192,14 @@ impl CreatePqcKeyPairAction {
                 self.sensitive,
             )?
         };
+
+        if let Some(key_id) = &self.key_id {
+            let private_key_attributes = request
+                .private_key_attributes
+                .get_or_insert_with(Default::default);
+            private_key_attributes.unique_identifier =
+                Some(UniqueIdentifier::TextString(key_id.clone()));
+        }
 
         let response = kms_rest_client
             .create_key_pair(request)

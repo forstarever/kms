@@ -18,6 +18,10 @@ pub use stores::{AtomicOperation, ObjectWithMetadata, ObjectsStore, PermissionsS
 #[derive(Debug, Eq, PartialEq)]
 pub enum KeyType {
     AesKey,
+    MlDsaPrivateKey,
+    MlDsaPublicKey,
+    MlKemPrivateKey,
+    MlKemPublicKey,
     RsaPrivateKey,
     RsaPublicKey,
 }
