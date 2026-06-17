@@ -12,6 +12,8 @@ audit-results
 
 # Runtime Artifacts / Local Data
 data/html
+data/local-softhsm-kms.toml
+data/local-softhsm-sqlite/
 crate/cli/*.sqlite
 http_cache.sqlite
 **/*cosmian-kms*

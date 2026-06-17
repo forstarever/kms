@@ -1,0 +1,23 @@
+# Local development profile for using the SoftHSMv2 build in:
+# /home/star/SoftHSMv2_pure_project_20260616
+#
+# Prefer scripts/run-local-softhsm-kms.sh for day-to-day use. The script detects
+# the current initialized SoftHSM slot and generates an equivalent runtime config.
+
+default_username = "admin"
+
+[[hsm_instances]]
+hsm_model = "softhsm2"
+hsm_admin = ["admin"]
+hsm_slot = [723642254]
+hsm_password = ["${LOCAL_SOFTHSM_PIN}"]
+
+[http]
+port = 9998
+hostname = "0.0.0.0"
+
+[db]
+database_type = "sqlite"
+sqlite_path = "/home/star/kms/data/local-softhsm-sqlite"
+clear_database = false
+unwrapped_cache_max_age = 15
