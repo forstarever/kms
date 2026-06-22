@@ -880,6 +880,17 @@ impl Session {
         algorithm: HsmEncryptionAlgorithm,
         plaintext: &[u8],
     ) -> HResult<EncryptedContent> {
+        self.encrypt_with_aad(key_handle, algorithm, plaintext, &[])
+    }
+
+    /// Encrypt data, passing AAD to CKM_AES_GCM when present.
+    pub fn encrypt_with_aad(
+        &self,
+        key_handle: CK_OBJECT_HANDLE,
+        algorithm: HsmEncryptionAlgorithm,
+        plaintext: &[u8],
+        aad: &[u8],
+    ) -> HResult<EncryptedContent> {
         Ok(match &algorithm {
             HsmEncryptionAlgorithm::MlKem => {
                 let (shared_secret, ciphertext) = self.mlkem_encapsulate(key_handle)?;
@@ -891,12 +902,17 @@ impl Session {
             }
             HsmEncryptionAlgorithm::AesGcm => {
                 let mut nonce = generate_random_nonce::<12>()?;
+                let mut aad = aad.to_vec();
                 let mut params = CK_AES_GCM_PARAMS {
                     pIv: nonce.as_mut_ptr(),
                     ulIvLen: CK_ULONG::try_from(AES_GCM_IV_LENGTH)?,
                     ulIvBits: CK_ULONG::try_from(AES_GCM_IV_LENGTH * 8)?,
-                    pAAD: ptr::null_mut(),
-                    ulAADLen: 0,
+                    pAAD: if aad.is_empty() {
+                        ptr::null_mut()
+                    } else {
+                        aad.as_mut_ptr()
+                    },
+                    ulAADLen: CK_ULONG::try_from(aad.len())?,
                     ulTagBits: CK_ULONG::try_from(AES_GCM_AUTH_TAG_LENGTH * 8)?,
                 };
                 let mut mechanism = CK_MECHANISM {
@@ -1021,6 +1037,17 @@ impl Session {
         algorithm: HsmEncryptionAlgorithm,
         ciphertext: &[u8],
     ) -> HResult<Zeroizing<Vec<u8>>> {
+        self.decrypt_with_aad(key_handle, algorithm, ciphertext, &[])
+    }
+
+    /// Decrypt data, passing AAD to CKM_AES_GCM when present.
+    pub fn decrypt_with_aad(
+        &self,
+        key_handle: CK_OBJECT_HANDLE,
+        algorithm: HsmEncryptionAlgorithm,
+        ciphertext: &[u8],
+        aad: &[u8],
+    ) -> HResult<Zeroizing<Vec<u8>>> {
         match &algorithm {
             HsmEncryptionAlgorithm::MlKem => self.mlkem_decapsulate(key_handle, ciphertext),
             HsmEncryptionAlgorithm::AesGcm => {
@@ -1032,12 +1059,17 @@ impl Session {
                     .ok_or_else(|| HError::Default("Failed to extract nonce".to_owned()))?
                     .try_into()
                     .map_err(|e| HError::Default(format!("Invalid AES GCM nonce: {e}")))?;
+                let mut aad = aad.to_vec();
                 let mut params = CK_AES_GCM_PARAMS {
                     pIv: nonce.as_mut_ptr(),
                     ulIvLen: CK_ULONG::try_from(AES_GCM_IV_LENGTH)?,
                     ulIvBits: CK_ULONG::try_from(AES_GCM_IV_LENGTH * 8)?,
-                    pAAD: ptr::null_mut(),
-                    ulAADLen: 0,
+                    pAAD: if aad.is_empty() {
+                        ptr::null_mut()
+                    } else {
+                        aad.as_mut_ptr()
+                    },
+                    ulAADLen: CK_ULONG::try_from(aad.len())?,
                     ulTagBits: CK_ULONG::try_from(AES_GCM_AUTH_TAG_LENGTH * 8)?,
                 };
                 let mut mechanism = CK_MECHANISM {

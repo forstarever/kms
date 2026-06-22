@@ -395,11 +395,6 @@ impl CryptoOracle for HsmStore {
         cryptographic_algorithm: Option<CryptoAlgorithm>,
         authenticated_encryption_additional_data: Option<&[u8]>,
     ) -> InterfaceResult<EncryptedContent> {
-        if authenticated_encryption_additional_data.is_some() {
-            return Err(InterfaceError::InvalidRequest(
-                "Additional authenticated data are not supported on HSMs for now".to_owned(),
-            ));
-        }
         let (mut slot_id, mut key_id) = parse_uid_with_prefix(uid, &self.prefix)?;
         let supported_algorithms = self.hsm.get_supported_algorithms(slot_id).await?;
         let cryptographic_algorithm = if let Some(ca) = cryptographic_algorithm {
@@ -463,8 +458,20 @@ impl CryptoOracle for HsmStore {
                 },
             }
         };
+        let aad = authenticated_encryption_additional_data.unwrap_or_default();
+        if !aad.is_empty() && cryptographic_algorithm != CryptoAlgorithm::AesGcm {
+            return Err(InterfaceError::InvalidRequest(
+                "Additional authenticated data are only supported with AES-GCM".to_owned(),
+            ));
+        }
         self.hsm
-            .encrypt(slot_id, key_id.as_bytes(), cryptographic_algorithm, data)
+            .encrypt(
+                slot_id,
+                key_id.as_bytes(),
+                cryptographic_algorithm,
+                data,
+                aad,
+            )
             .await
     }
 
@@ -475,11 +482,6 @@ impl CryptoOracle for HsmStore {
         cryptographic_algorithm: Option<CryptoAlgorithm>,
         authenticated_encryption_additional_data: Option<&[u8]>,
     ) -> InterfaceResult<Zeroizing<Vec<u8>>> {
-        if authenticated_encryption_additional_data.is_some() {
-            return Err(InterfaceError::InvalidRequest(
-                "Additional authenticated data are not supported on HSMs for now".to_owned(),
-            ));
-        }
         let (slot_id, key_id) = parse_uid_with_prefix(uid, &self.prefix)?;
         let supported_algorithms = self.hsm.get_supported_algorithms(slot_id).await?;
         let cryptographic_algorithm = if let Some(ca) = cryptographic_algorithm {
@@ -516,8 +518,20 @@ impl CryptoOracle for HsmStore {
                 },
             }
         };
+        let aad = authenticated_encryption_additional_data.unwrap_or_default();
+        if !aad.is_empty() && cryptographic_algorithm != CryptoAlgorithm::AesGcm {
+            return Err(InterfaceError::InvalidRequest(
+                "Additional authenticated data are only supported with AES-GCM".to_owned(),
+            ));
+        }
         self.hsm
-            .decrypt(slot_id, key_id.as_bytes(), cryptographic_algorithm, data)
+            .decrypt(
+                slot_id,
+                key_id.as_bytes(),
+                cryptographic_algorithm,
+                data,
+                aad,
+            )
             .await
     }
 

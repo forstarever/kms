@@ -148,6 +148,13 @@ fn test_hsm_softhsm2_rsa_oaep_encrypt() -> HResult<()> {
 
 #[test]
 #[ignore = "Requires Linux, SoftHSM2 library, and HSM environment"]
+fn test_hsm_softhsm2_rsa_oaep_sha256_encrypt() -> HResult<()> {
+    let slot = shared::instantiate_and_get_slot::<SofthsmCapabilityProvider>(&cfg()?)?;
+    shared::rsa_oaep_encrypt(&slot, RsaOaepDigest::SHA256)
+}
+
+#[test]
+#[ignore = "Requires Linux, SoftHSM2 library, and HSM environment"]
 fn test_hsm_softhsm2_aes_gcm_encrypt() -> HResult<()> {
     let slot = shared::instantiate_and_get_slot::<SofthsmCapabilityProvider>(&cfg()?)?;
     shared::aes_gcm_encrypt(&slot)

@@ -373,26 +373,28 @@ pub fn aes_gcm_encrypt(slot: &Arc<SlotManager>) -> HResult<()> {
     log_init(None);
     let session = slot.open_session(true)?;
     let data = b"Hello, World!";
+    let aad = b"kms-hsm-aes-gcm-aad";
     let key_id = Uuid::new_v4().to_string();
     let sk = session.generate_aes_key(key_id.as_bytes(), AesKeySize::Aes256, true)?;
     info!("AES key handle: {sk}");
-    let enc = session.encrypt(sk, HsmEncryptionAlgorithm::AesGcm, data)?;
+    let enc = session.encrypt_with_aad(sk, HsmEncryptionAlgorithm::AesGcm, data, aad)?;
     assert_eq!(enc.ciphertext.len(), data.len());
     assert_eq!(enc.tag.clone().unwrap_or_default().len(), 16);
     assert_eq!(enc.iv.clone().unwrap_or_default().len(), 12);
-    let plaintext = session.decrypt(
-        sk,
-        HsmEncryptionAlgorithm::AesGcm,
-        [
-            enc.iv.unwrap_or_default(),
-            enc.ciphertext,
-            enc.tag.unwrap_or_default(),
-        ]
-        .concat()
-        .as_slice(),
-    )?;
+    let packed = [
+        enc.iv.clone().unwrap_or_default(),
+        enc.ciphertext.clone(),
+        enc.tag.clone().unwrap_or_default(),
+    ]
+    .concat();
+    let plaintext = session.decrypt_with_aad(sk, HsmEncryptionAlgorithm::AesGcm, &packed, aad)?;
     assert_eq!(plaintext.as_slice(), data);
-    info!("Successfully encrypted/decrypted with AES GCM");
+    assert!(
+        session
+            .decrypt_with_aad(sk, HsmEncryptionAlgorithm::AesGcm, &packed, b"wrong-aad")
+            .is_err()
+    );
+    info!("Successfully encrypted/decrypted with AES GCM and authenticated AAD");
     Ok(())
 }
 

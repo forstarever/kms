@@ -300,6 +300,7 @@ pub trait HSM: Send + Sync {
     /// * `key_id` - the ID of the key to use for encryption
     /// * `algorithm` - the encryption algorithm to use
     /// * `data` - the data to encrypt
+    /// * `authenticated_encryption_additional_data` - AES-GCM AAD; empty for other algorithms
     /// # Returns
     /// * `PluginResult<Vec<u8>>` - the encrypted data
     async fn encrypt(
@@ -308,6 +309,7 @@ pub trait HSM: Send + Sync {
         key_id: &[u8],
         algorithm: CryptoAlgorithm,
         data: &[u8],
+        authenticated_encryption_additional_data: &[u8],
     ) -> InterfaceResult<EncryptedContent>;
 
     /// Decrypt data using the given key in the HSM.
@@ -316,6 +318,7 @@ pub trait HSM: Send + Sync {
     /// * `key_id` - the ID of the key to use for decryption
     /// * `algorithm` - the encryption algorithm to use
     /// * `data` - the data to decrypt
+    /// * `authenticated_encryption_additional_data` - AES-GCM AAD; empty for other algorithms
     /// # Returns
     /// * `PluginResult<Vec<u8>>` - the decrypted data
     async fn decrypt(
@@ -324,6 +327,7 @@ pub trait HSM: Send + Sync {
         key_id: &[u8],
         algorithm: CryptoAlgorithm,
         data: &[u8],
+        authenticated_encryption_additional_data: &[u8],
     ) -> InterfaceResult<Zeroizing<Vec<u8>>>;
 
     /// Get the type of the key.

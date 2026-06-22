@@ -232,11 +232,17 @@ impl<P: HsmProvider> HSM for BaseHsm<P> {
         key_id: &[u8],
         algorithm: CryptoAlgorithm,
         data: &[u8],
+        authenticated_encryption_additional_data: &[u8],
     ) -> InterfaceResult<EncryptedContent> {
         let slot = self.get_slot(slot_id)?;
         let session = slot.open_session(true)?;
         let handle = session.get_object_handle(key_id)?;
-        let encrypted_content = session.encrypt(handle, algorithm.into(), data)?;
+        let encrypted_content = session.encrypt_with_aad(
+            handle,
+            algorithm.into(),
+            data,
+            authenticated_encryption_additional_data,
+        )?;
         Ok(encrypted_content)
     }
 
@@ -246,11 +252,17 @@ impl<P: HsmProvider> HSM for BaseHsm<P> {
         key_id: &[u8],
         algorithm: CryptoAlgorithm,
         data: &[u8],
+        authenticated_encryption_additional_data: &[u8],
     ) -> InterfaceResult<Zeroizing<Vec<u8>>> {
         let slot = self.get_slot(slot_id)?;
         let session = slot.open_session(true)?;
         let handle = session.get_object_handle(key_id)?;
-        let plaintext = session.decrypt(handle, algorithm.into(), data)?;
+        let plaintext = session.decrypt_with_aad(
+            handle,
+            algorithm.into(),
+            data,
+            authenticated_encryption_additional_data,
+        )?;
         Ok(plaintext)
     }
 
