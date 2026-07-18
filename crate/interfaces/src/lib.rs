@@ -4,12 +4,13 @@ mod hsm;
 mod stores;
 
 pub use crypto_oracle::{
-    CryptoAlgorithm, CryptoOracle, EncryptedContent, KeyMetadata, SigningAlgorithm,
+    CryptoAlgorithm, CryptoDecryptBatchRequest, CryptoEncryptBatchRequest, CryptoOracle,
+    EncryptedContent, KeyMetadata, SigningAlgorithm,
 };
 pub use error::{InterfaceError, InterfaceResult};
 pub use hsm::{
-    HSM, HsmKeyAlgorithm, HsmKeypairAlgorithm, HsmObject, HsmObjectFilter, HsmStore, KeyMaterial,
-    RsaPrivateKeyMaterial, RsaPublicKeyMaterial,
+    HSM, HsmDecryptBatchRequest, HsmEncryptBatchRequest, HsmKeyAlgorithm, HsmKeypairAlgorithm,
+    HsmObject, HsmObjectFilter, HsmStore, KeyMaterial, RsaPrivateKeyMaterial, RsaPublicKeyMaterial,
 };
 pub use stores::{AtomicOperation, ObjectWithMetadata, ObjectsStore, PermissionsStore};
 

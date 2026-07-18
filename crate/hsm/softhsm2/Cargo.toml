@@ -20,6 +20,8 @@ doctest = false
 cosmian_kms_base_hsm = { path = "../base_hsm", version = "5.23.0" }
 
 [dev-dependencies]
+cosmian_kms_interfaces = { path = "../../interfaces", version = "5.23.0" }
+futures = { workspace = true }
 libloading = { workspace = true }
 pkcs11-sys = { workspace = true }
 

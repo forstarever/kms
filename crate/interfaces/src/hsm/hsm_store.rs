@@ -22,9 +22,10 @@ use num_bigint_dig::{BigInt, Sign};
 use zeroize::Zeroizing;
 
 use crate::{
-    AtomicOperation, CryptoAlgorithm, CryptoOracle, HSM, HsmKeyAlgorithm, HsmKeypairAlgorithm,
-    HsmObject, HsmObjectFilter, InterfaceError, InterfaceResult, KeyMaterial, KeyType,
-    ObjectWithMetadata, ObjectsStore, SigningAlgorithm,
+    AtomicOperation, CryptoAlgorithm, CryptoDecryptBatchRequest, CryptoEncryptBatchRequest,
+    CryptoOracle, HSM, HsmDecryptBatchRequest, HsmEncryptBatchRequest, HsmKeyAlgorithm,
+    HsmKeypairAlgorithm, HsmObject, HsmObjectFilter, InterfaceError, InterfaceResult, KeyMaterial,
+    KeyType, ObjectWithMetadata, ObjectsStore, SigningAlgorithm,
     crypto_oracle::{EncryptedContent, KeyMetadata},
 };
 
@@ -68,6 +69,144 @@ impl HsmStore {
             .iter()
             .find(|a| a.as_str() != "*")
             .map_or("admin", String::as_str)
+    }
+
+    async fn resolve_encrypt_target(
+        &self,
+        uid: &str,
+        cryptographic_algorithm: Option<CryptoAlgorithm>,
+        authenticated_encryption_additional_data: Option<&[u8]>,
+    ) -> InterfaceResult<(usize, Vec<u8>, CryptoAlgorithm, Vec<u8>)> {
+        let (mut slot_id, mut key_id) = parse_uid_with_prefix(uid, &self.prefix)?;
+        let supported_algorithms = self.hsm.get_supported_algorithms(slot_id).await?;
+        let cryptographic_algorithm = if let Some(ca) = cryptographic_algorithm {
+            ca
+        } else {
+            debug!("Using default algorithm to encrypt");
+            match self.hsm.get_key_type(slot_id, key_id.as_bytes()).await? {
+                None => {
+                    return Err(InterfaceError::InvalidRequest(format!(
+                        "The key type of key: {uid}, cannot be determined"
+                    )));
+                }
+                Some(key_type) => match key_type {
+                    KeyType::AesKey => CryptoAlgorithm::get_aes_algorithm(&supported_algorithms)?,
+                    KeyType::MlKemPublicKey => CryptoAlgorithm::MlKem,
+                    KeyType::MlKemPrivateKey => {
+                        let pk_uid = format!("{uid}_pk");
+                        debug!(
+                            "encrypt: an ML-KEM private key {uid} was specified. Trying to use \
+                             public key {pk_uid} for encapsulation"
+                        );
+                        (slot_id, key_id) = parse_uid_with_prefix(&pk_uid, &self.prefix)?;
+                        self.hsm
+                            .get_key_type(slot_id, key_id.as_bytes())
+                            .await?
+                            .ok_or_else(|| {
+                                InterfaceError::InvalidRequest(format!(
+                                    "The key {uid} is an ML-KEM private key, but no public key \
+                                     {pk_uid} is available"
+                                ))
+                            })?;
+                        CryptoAlgorithm::MlKem
+                    }
+                    KeyType::MlDsaPrivateKey | KeyType::MlDsaPublicKey => {
+                        return Err(InterfaceError::InvalidRequest(
+                            "ML-DSA keys cannot be used for encryption/encapsulation".to_owned(),
+                        ));
+                    }
+                    KeyType::RsaPublicKey => {
+                        CryptoAlgorithm::get_rsa_algorithm(&supported_algorithms)?
+                    }
+                    KeyType::RsaPrivateKey => {
+                        let pk_uid = format!("{uid}_pk");
+                        debug!(
+                            "encrypt: an RSA private key {uid} was specified. Trying to use \
+                             public key {pk_uid} for encryption"
+                        );
+                        (slot_id, key_id) = parse_uid_with_prefix(&pk_uid, &self.prefix)?;
+                        self.hsm
+                            .get_key_type(slot_id, key_id.as_bytes())
+                            .await?
+                            .ok_or_else(|| {
+                                InterfaceError::InvalidRequest(format!(
+                                    "The key {uid} is a private key, but no public key {pk_uid} \
+                                     is available"
+                                ))
+                            })?;
+                        CryptoAlgorithm::get_rsa_algorithm(&supported_algorithms)?
+                    }
+                },
+            }
+        };
+        let aad = authenticated_encryption_additional_data.unwrap_or_default();
+        if !aad.is_empty() && cryptographic_algorithm != CryptoAlgorithm::AesGcm {
+            return Err(InterfaceError::InvalidRequest(
+                "Additional authenticated data are only supported with AES-GCM".to_owned(),
+            ));
+        }
+        Ok((
+            slot_id,
+            key_id.into_bytes(),
+            cryptographic_algorithm,
+            aad.to_vec(),
+        ))
+    }
+
+    async fn resolve_decrypt_target(
+        &self,
+        uid: &str,
+        cryptographic_algorithm: Option<CryptoAlgorithm>,
+        authenticated_encryption_additional_data: Option<&[u8]>,
+    ) -> InterfaceResult<(usize, Vec<u8>, CryptoAlgorithm, Vec<u8>)> {
+        let (slot_id, key_id) = parse_uid_with_prefix(uid, &self.prefix)?;
+        let supported_algorithms = self.hsm.get_supported_algorithms(slot_id).await?;
+        let cryptographic_algorithm = if let Some(ca) = cryptographic_algorithm {
+            ca
+        } else {
+            debug!("Using default algorithm to decrypt");
+            match self.hsm.get_key_type(slot_id, key_id.as_bytes()).await? {
+                None => {
+                    return Err(InterfaceError::InvalidRequest(
+                        "The key {}type is not known".to_owned(),
+                    ));
+                }
+                Some(key_type) => match key_type {
+                    KeyType::AesKey => CryptoAlgorithm::get_aes_algorithm(&supported_algorithms)?,
+                    KeyType::MlKemPrivateKey => CryptoAlgorithm::MlKem,
+                    KeyType::MlKemPublicKey => {
+                        return Err(InterfaceError::Default(
+                            "An ML-KEM public key cannot be used to decapsulate".to_owned(),
+                        ));
+                    }
+                    KeyType::MlDsaPrivateKey | KeyType::MlDsaPublicKey => {
+                        return Err(InterfaceError::InvalidRequest(
+                            "ML-DSA keys cannot be used for decryption/decapsulation".to_owned(),
+                        ));
+                    }
+                    KeyType::RsaPrivateKey => {
+                        CryptoAlgorithm::get_rsa_algorithm(&supported_algorithms)?
+                    }
+                    KeyType::RsaPublicKey => {
+                        return Err(InterfaceError::Default(
+                            "An RSA public key cannot be used to decrypt".to_owned(),
+                        ));
+                    }
+                },
+            }
+        };
+        let aad = authenticated_encryption_additional_data.unwrap_or_default();
+        if !aad.is_empty() && cryptographic_algorithm != CryptoAlgorithm::AesGcm {
+            return Err(InterfaceError::InvalidRequest(
+                "Additional authenticated data are only supported with AES-GCM".to_owned(),
+            ));
+        }
+        Ok((
+            slot_id,
+            key_id.into_bytes(),
+            cryptographic_algorithm,
+            aad.to_vec(),
+        ))
     }
 }
 
@@ -395,84 +534,40 @@ impl CryptoOracle for HsmStore {
         cryptographic_algorithm: Option<CryptoAlgorithm>,
         authenticated_encryption_additional_data: Option<&[u8]>,
     ) -> InterfaceResult<EncryptedContent> {
-        let (mut slot_id, mut key_id) = parse_uid_with_prefix(uid, &self.prefix)?;
-        let supported_algorithms = self.hsm.get_supported_algorithms(slot_id).await?;
-        let cryptographic_algorithm = if let Some(ca) = cryptographic_algorithm {
-            ca
-        } else {
-            debug!("Using default algorithm to encrypt");
-            match self.hsm.get_key_type(slot_id, key_id.as_bytes()).await? {
-                None => {
-                    return Err(InterfaceError::InvalidRequest(format!(
-                        "The key type of key: {uid}, cannot be determined"
-                    )));
-                }
-                Some(key_type) => match key_type {
-                    KeyType::AesKey => CryptoAlgorithm::get_aes_algorithm(&supported_algorithms)?,
-                    KeyType::MlKemPublicKey => CryptoAlgorithm::MlKem,
-                    KeyType::MlKemPrivateKey => {
-                        let pk_uid = format!("{uid}_pk");
-                        debug!(
-                            "encrypt: an ML-KEM private key {uid} was specified. Trying to use \
-                             public key {pk_uid} for encapsulation"
-                        );
-                        (slot_id, key_id) = parse_uid_with_prefix(&pk_uid, &self.prefix)?;
-                        self.hsm
-                            .get_key_type(slot_id, key_id.as_bytes())
-                            .await?
-                            .ok_or_else(|| {
-                                InterfaceError::InvalidRequest(format!(
-                                    "The key {uid} is an ML-KEM private key, but no public key \
-                                     {pk_uid} is available"
-                                ))
-                            })?;
-                        CryptoAlgorithm::MlKem
-                    }
-                    KeyType::MlDsaPrivateKey | KeyType::MlDsaPublicKey => {
-                        return Err(InterfaceError::InvalidRequest(
-                            "ML-DSA keys cannot be used for encryption/encapsulation".to_owned(),
-                        ));
-                    }
-                    KeyType::RsaPublicKey => {
-                        CryptoAlgorithm::get_rsa_algorithm(&supported_algorithms)?
-                    }
-                    KeyType::RsaPrivateKey => {
-                        // try fetching the corresponding public key
-                        let pk_uid = format!("{uid}_pk");
-                        debug!(
-                            "encrypt: an RSA private key {uid} was specified. Trying to use \
-                             public key {pk_uid} for encryption"
-                        );
-                        (slot_id, key_id) = parse_uid_with_prefix(&pk_uid, &self.prefix)?;
-                        self.hsm
-                            .get_key_type(slot_id, key_id.as_bytes())
-                            .await?
-                            .ok_or_else(|| {
-                                InterfaceError::InvalidRequest(format!(
-                                    "The key {uid} is a private key, but no public key {pk_uid} \
-                                     is available"
-                                ))
-                            })?;
-                        CryptoAlgorithm::get_rsa_algorithm(&supported_algorithms)?
-                    }
-                },
-            }
-        };
-        let aad = authenticated_encryption_additional_data.unwrap_or_default();
-        if !aad.is_empty() && cryptographic_algorithm != CryptoAlgorithm::AesGcm {
-            return Err(InterfaceError::InvalidRequest(
-                "Additional authenticated data are only supported with AES-GCM".to_owned(),
-            ));
-        }
-        self.hsm
-            .encrypt(
-                slot_id,
-                key_id.as_bytes(),
+        let (slot_id, key_id, cryptographic_algorithm, aad) = self
+            .resolve_encrypt_target(
+                uid,
                 cryptographic_algorithm,
-                data,
-                aad,
+                authenticated_encryption_additional_data,
             )
+            .await?;
+        self.hsm
+            .encrypt(slot_id, &key_id, cryptographic_algorithm, data, &aad)
             .await
+    }
+
+    async fn encrypt_batch(
+        &self,
+        requests: &[CryptoEncryptBatchRequest],
+    ) -> InterfaceResult<Vec<EncryptedContent>> {
+        let mut hsm_requests = Vec::with_capacity(requests.len());
+        for request in requests {
+            let (slot_id, key_id, algorithm, aad) = self
+                .resolve_encrypt_target(
+                    &request.uid,
+                    request.cryptographic_algorithm.clone(),
+                    request.authenticated_encryption_additional_data.as_deref(),
+                )
+                .await?;
+            hsm_requests.push(HsmEncryptBatchRequest {
+                slot_id,
+                key_id,
+                algorithm,
+                data: request.data.clone(),
+                authenticated_encryption_additional_data: aad,
+            });
+        }
+        self.hsm.encrypt_batch(&hsm_requests).await
     }
 
     async fn decrypt(
@@ -482,57 +577,40 @@ impl CryptoOracle for HsmStore {
         cryptographic_algorithm: Option<CryptoAlgorithm>,
         authenticated_encryption_additional_data: Option<&[u8]>,
     ) -> InterfaceResult<Zeroizing<Vec<u8>>> {
-        let (slot_id, key_id) = parse_uid_with_prefix(uid, &self.prefix)?;
-        let supported_algorithms = self.hsm.get_supported_algorithms(slot_id).await?;
-        let cryptographic_algorithm = if let Some(ca) = cryptographic_algorithm {
-            ca
-        } else {
-            debug!("Using default algorithm to decrypt");
-            match self.hsm.get_key_type(slot_id, key_id.as_bytes()).await? {
-                None => {
-                    return Err(InterfaceError::InvalidRequest(
-                        "The key {}type is not known".to_owned(),
-                    ));
-                }
-                Some(key_type) => match key_type {
-                    KeyType::AesKey => CryptoAlgorithm::get_aes_algorithm(&supported_algorithms)?,
-                    KeyType::MlKemPrivateKey => CryptoAlgorithm::MlKem,
-                    KeyType::MlKemPublicKey => {
-                        return Err(InterfaceError::Default(
-                            "An ML-KEM public key cannot be used to decapsulate".to_owned(),
-                        ));
-                    }
-                    KeyType::MlDsaPrivateKey | KeyType::MlDsaPublicKey => {
-                        return Err(InterfaceError::InvalidRequest(
-                            "ML-DSA keys cannot be used for decryption/decapsulation".to_owned(),
-                        ));
-                    }
-                    KeyType::RsaPrivateKey => {
-                        CryptoAlgorithm::get_rsa_algorithm(&supported_algorithms)?
-                    }
-                    KeyType::RsaPublicKey => {
-                        return Err(InterfaceError::Default(
-                            "An RSA public key cannot be used to decrypt".to_owned(),
-                        ));
-                    }
-                },
-            }
-        };
-        let aad = authenticated_encryption_additional_data.unwrap_or_default();
-        if !aad.is_empty() && cryptographic_algorithm != CryptoAlgorithm::AesGcm {
-            return Err(InterfaceError::InvalidRequest(
-                "Additional authenticated data are only supported with AES-GCM".to_owned(),
-            ));
-        }
-        self.hsm
-            .decrypt(
-                slot_id,
-                key_id.as_bytes(),
+        let (slot_id, key_id, cryptographic_algorithm, aad) = self
+            .resolve_decrypt_target(
+                uid,
                 cryptographic_algorithm,
-                data,
-                aad,
+                authenticated_encryption_additional_data,
             )
+            .await?;
+        self.hsm
+            .decrypt(slot_id, &key_id, cryptographic_algorithm, data, &aad)
             .await
+    }
+
+    async fn decrypt_batch(
+        &self,
+        requests: &[CryptoDecryptBatchRequest],
+    ) -> InterfaceResult<Vec<Zeroizing<Vec<u8>>>> {
+        let mut hsm_requests = Vec::with_capacity(requests.len());
+        for request in requests {
+            let (slot_id, key_id, algorithm, aad) = self
+                .resolve_decrypt_target(
+                    &request.uid,
+                    request.cryptographic_algorithm.clone(),
+                    request.authenticated_encryption_additional_data.as_deref(),
+                )
+                .await?;
+            hsm_requests.push(HsmDecryptBatchRequest {
+                slot_id,
+                key_id,
+                algorithm,
+                data: request.data.clone(),
+                authenticated_encryption_additional_data: aad,
+            });
+        }
+        self.hsm.decrypt_batch(&hsm_requests).await
     }
 
     async fn get_key_type(&self, uid: &str) -> InterfaceResult<Option<KeyType>> {
@@ -1315,13 +1393,225 @@ fn to_object_with_metadata(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
     use cosmian_kmip::kmip_2_1::{
         kmip_attributes::Attributes,
         kmip_types::{Name, NameType},
     };
+    use futures::executor::block_on;
+    use zeroize::Zeroizing;
 
-    use super::check_basic_compatibility;
-    use crate::InterfaceError;
+    use super::{HsmStore, check_basic_compatibility};
+    use crate::{
+        CryptoAlgorithm, CryptoDecryptBatchRequest, CryptoEncryptBatchRequest, CryptoOracle, HSM,
+        HsmDecryptBatchRequest, HsmEncryptBatchRequest, HsmKeyAlgorithm, HsmKeypairAlgorithm,
+        HsmObject, HsmObjectFilter, InterfaceError, InterfaceResult, KeyMetadata, KeyType,
+        SigningAlgorithm, crypto_oracle::EncryptedContent,
+    };
+
+    #[derive(Default)]
+    struct FakeHsm {
+        encrypt_calls: Mutex<usize>,
+        decrypt_calls: Mutex<usize>,
+        encrypt_batch_calls: Mutex<usize>,
+        decrypt_batch_calls: Mutex<usize>,
+        encrypt_requests: Mutex<Vec<(usize, Vec<u8>, CryptoAlgorithm, Vec<u8>, Vec<u8>)>>,
+        decrypt_requests: Mutex<Vec<(usize, Vec<u8>, CryptoAlgorithm, Vec<u8>, Vec<u8>)>>,
+    }
+
+    impl FakeHsm {
+        fn unsupported<T>() -> InterfaceResult<T> {
+            Err(InterfaceError::Default(
+                "fake HSM method is not implemented for this test".to_owned(),
+            ))
+        }
+    }
+
+    #[async_trait]
+    impl HSM for FakeHsm {
+        async fn get_available_slot_list(&self) -> InterfaceResult<Vec<usize>> {
+            Ok(vec![7])
+        }
+
+        async fn get_supported_algorithms(
+            &self,
+            _slot_id: usize,
+        ) -> InterfaceResult<Vec<CryptoAlgorithm>> {
+            Ok(vec![
+                CryptoAlgorithm::AesGcm,
+                CryptoAlgorithm::RsaOaepSha256,
+            ])
+        }
+
+        async fn create_key(
+            &self,
+            _slot_id: usize,
+            _id: &[u8],
+            _algorithm: HsmKeyAlgorithm,
+            _key_length_in_bits: usize,
+            _sensitive: bool,
+        ) -> InterfaceResult<()> {
+            Self::unsupported()
+        }
+
+        async fn create_keypair(
+            &self,
+            _slot_id: usize,
+            _sk_id: &[u8],
+            _pk_id: &[u8],
+            _algorithm: HsmKeypairAlgorithm,
+            _key_length_in_bits: usize,
+            _sensitive: bool,
+        ) -> InterfaceResult<()> {
+            Self::unsupported()
+        }
+
+        async fn export(
+            &self,
+            _slot_id: usize,
+            _object_id: &[u8],
+        ) -> InterfaceResult<Option<HsmObject>> {
+            Self::unsupported()
+        }
+
+        async fn delete(&self, _slot_id: usize, _object_id: &[u8]) -> InterfaceResult<()> {
+            Self::unsupported()
+        }
+
+        async fn find(
+            &self,
+            _slot_id: usize,
+            _object_filter: HsmObjectFilter,
+        ) -> InterfaceResult<Vec<Vec<u8>>> {
+            Self::unsupported()
+        }
+
+        async fn encrypt(
+            &self,
+            _slot_id: usize,
+            _key_id: &[u8],
+            _algorithm: CryptoAlgorithm,
+            _data: &[u8],
+            _authenticated_encryption_additional_data: &[u8],
+        ) -> InterfaceResult<EncryptedContent> {
+            *self.encrypt_calls.lock().unwrap() += 1;
+            Self::unsupported()
+        }
+
+        async fn encrypt_batch(
+            &self,
+            requests: &[HsmEncryptBatchRequest],
+        ) -> InterfaceResult<Vec<EncryptedContent>> {
+            *self.encrypt_batch_calls.lock().unwrap() += 1;
+            let mut responses = Vec::with_capacity(requests.len());
+            let mut seen = self.encrypt_requests.lock().unwrap();
+            for request in requests {
+                seen.push((
+                    request.slot_id,
+                    request.key_id.clone(),
+                    request.algorithm.clone(),
+                    request.data.clone(),
+                    request.authenticated_encryption_additional_data.clone(),
+                ));
+                responses.push(EncryptedContent {
+                    ciphertext: [request.data.as_slice(), b"-encrypted"].concat(),
+                    iv: None,
+                    tag: None,
+                });
+            }
+            Ok(responses)
+        }
+
+        async fn decrypt(
+            &self,
+            _slot_id: usize,
+            _key_id: &[u8],
+            _algorithm: CryptoAlgorithm,
+            _data: &[u8],
+            _authenticated_encryption_additional_data: &[u8],
+        ) -> InterfaceResult<Zeroizing<Vec<u8>>> {
+            *self.decrypt_calls.lock().unwrap() += 1;
+            Self::unsupported()
+        }
+
+        async fn decrypt_batch(
+            &self,
+            requests: &[HsmDecryptBatchRequest],
+        ) -> InterfaceResult<Vec<Zeroizing<Vec<u8>>>> {
+            *self.decrypt_batch_calls.lock().unwrap() += 1;
+            let mut responses = Vec::with_capacity(requests.len());
+            let mut seen = self.decrypt_requests.lock().unwrap();
+            for request in requests {
+                seen.push((
+                    request.slot_id,
+                    request.key_id.clone(),
+                    request.algorithm.clone(),
+                    request.data.clone(),
+                    request.authenticated_encryption_additional_data.clone(),
+                ));
+                responses.push(Zeroizing::new(
+                    [request.data.as_slice(), b"-plain"].concat(),
+                ));
+            }
+            Ok(responses)
+        }
+
+        async fn get_key_type(
+            &self,
+            _slot_id: usize,
+            key_id: &[u8],
+        ) -> InterfaceResult<Option<KeyType>> {
+            Ok(match key_id {
+                b"aes" => Some(KeyType::AesKey),
+                b"rsa-pk" => Some(KeyType::RsaPublicKey),
+                b"rsa-sk" => Some(KeyType::RsaPrivateKey),
+                _ => None,
+            })
+        }
+
+        async fn get_key_metadata(
+            &self,
+            _slot_id: usize,
+            _key_id: &[u8],
+        ) -> InterfaceResult<Option<KeyMetadata>> {
+            Self::unsupported()
+        }
+
+        async fn sign(
+            &self,
+            _slot_id: usize,
+            _key_id: &[u8],
+            _algorithm: SigningAlgorithm,
+            _data: &[u8],
+        ) -> InterfaceResult<Vec<u8>> {
+            Self::unsupported()
+        }
+
+        async fn signature_verify(
+            &self,
+            _slot_id: usize,
+            _key_id: &[u8],
+            _algorithm: SigningAlgorithm,
+            _data: &[u8],
+            _signature: &[u8],
+        ) -> InterfaceResult<bool> {
+            Self::unsupported()
+        }
+
+        async fn generate_random(&self, _slot_id: usize, _len: usize) -> InterfaceResult<Vec<u8>> {
+            Self::unsupported()
+        }
+
+        async fn seed_random(&self, _slot_id: usize, _seed: &[u8]) -> InterfaceResult<()> {
+            Self::unsupported()
+        }
+
+        fn hsm_lib(&self) -> Option<&dyn std::any::Any> {
+            None
+        }
+    }
 
     /// Locate with a Name filter must not match any HSM key (issue #935):
     /// HSM keys have no KMIP Name, so the filter should yield empty results
@@ -1357,5 +1647,68 @@ mod tests {
             result.is_ok(),
             "Expected ObjectType-only filter to be compatible with HSM, got: {result:?}"
         );
+    }
+
+    #[test]
+    fn test_hsm_store_batch_methods_use_hsm_batch_hooks() {
+        let hsm = Arc::new(FakeHsm::default());
+        let store = HsmStore::new(hsm.clone(), &["*".to_owned()], "softhsm2", "hsm");
+
+        let encrypted = block_on(store.encrypt_batch(&[
+            CryptoEncryptBatchRequest {
+                uid: "hsm::7::rsa-pk".to_owned(),
+                data: b"one".to_vec(),
+                cryptographic_algorithm: Some(CryptoAlgorithm::RsaOaepSha256),
+                authenticated_encryption_additional_data: None,
+            },
+            CryptoEncryptBatchRequest {
+                uid: "hsm::7::rsa-pk".to_owned(),
+                data: b"two".to_vec(),
+                cryptographic_algorithm: Some(CryptoAlgorithm::RsaOaepSha256),
+                authenticated_encryption_additional_data: None,
+            },
+        ]))
+        .expect("encrypt batch should succeed");
+        assert_eq!(encrypted[0].ciphertext, b"one-encrypted");
+        assert_eq!(encrypted[1].ciphertext, b"two-encrypted");
+
+        let decrypted = block_on(store.decrypt_batch(&[
+            CryptoDecryptBatchRequest {
+                uid: "hsm::7::rsa-sk".to_owned(),
+                data: b"alpha".to_vec(),
+                cryptographic_algorithm: Some(CryptoAlgorithm::RsaOaepSha256),
+                authenticated_encryption_additional_data: None,
+            },
+            CryptoDecryptBatchRequest {
+                uid: "hsm::7::rsa-sk".to_owned(),
+                data: b"beta".to_vec(),
+                cryptographic_algorithm: Some(CryptoAlgorithm::RsaOaepSha256),
+                authenticated_encryption_additional_data: None,
+            },
+        ]))
+        .expect("decrypt batch should succeed");
+        assert_eq!(decrypted[0].as_slice(), b"alpha-plain");
+        assert_eq!(decrypted[1].as_slice(), b"beta-plain");
+
+        assert_eq!(*hsm.encrypt_calls.lock().unwrap(), 0);
+        assert_eq!(*hsm.decrypt_calls.lock().unwrap(), 0);
+        assert_eq!(*hsm.encrypt_batch_calls.lock().unwrap(), 1);
+        assert_eq!(*hsm.decrypt_batch_calls.lock().unwrap(), 1);
+
+        let encrypt_seen = hsm.encrypt_requests.lock().unwrap();
+        assert_eq!(encrypt_seen.len(), 2);
+        assert_eq!(encrypt_seen[0].0, 7);
+        assert_eq!(encrypt_seen[0].1, b"rsa-pk");
+        assert_eq!(encrypt_seen[0].2, CryptoAlgorithm::RsaOaepSha256);
+        assert_eq!(encrypt_seen[0].3, b"one");
+        assert_eq!(encrypt_seen[1].3, b"two");
+
+        let decrypt_seen = hsm.decrypt_requests.lock().unwrap();
+        assert_eq!(decrypt_seen.len(), 2);
+        assert_eq!(decrypt_seen[0].0, 7);
+        assert_eq!(decrypt_seen[0].1, b"rsa-sk");
+        assert_eq!(decrypt_seen[0].2, CryptoAlgorithm::RsaOaepSha256);
+        assert_eq!(decrypt_seen[0].3, b"alpha");
+        assert_eq!(decrypt_seen[1].3, b"beta");
     }
 }

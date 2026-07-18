@@ -1407,6 +1407,7 @@ dependencies = [
  "async-trait",
  "cosmian_kmip",
  "cosmian_logger",
+ "futures",
  "num-bigint-dig",
  "serde_json",
  "thiserror 2.0.18",
@@ -5179,6 +5180,8 @@ name = "softhsm2_pkcs11_loader"
 version = "5.23.0"
 dependencies = [
  "cosmian_kms_base_hsm",
+ "cosmian_kms_interfaces",
+ "futures",
  "libloading",
  "pkcs11-sys",
 ]

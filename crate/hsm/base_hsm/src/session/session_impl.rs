@@ -891,6 +891,17 @@ impl Session {
         plaintext: &[u8],
         aad: &[u8],
     ) -> HResult<EncryptedContent> {
+        self.encrypt_with_aad_and_output_len(key_handle, algorithm, plaintext, aad, None)
+    }
+
+    pub fn encrypt_with_aad_and_output_len(
+        &self,
+        key_handle: CK_OBJECT_HANDLE,
+        algorithm: HsmEncryptionAlgorithm,
+        plaintext: &[u8],
+        aad: &[u8],
+        fixed_output_len: Option<usize>,
+    ) -> HResult<EncryptedContent> {
         Ok(match &algorithm {
             HsmEncryptionAlgorithm::MlKem => {
                 let (shared_secret, ciphertext) = self.mlkem_encapsulate(key_handle)?;
@@ -921,7 +932,7 @@ impl Session {
                     ulParameterLen: CK_ULONG::try_from(size_of::<CK_AES_GCM_PARAMS>())?,
                 };
                 let ciphertext =
-                    self.encrypt_with_mechanism(key_handle, &mut mechanism, plaintext)?;
+                    self.encrypt_with_mechanism(key_handle, &mut mechanism, plaintext, None)?;
                 EncryptedContent {
                     iv: Some(nonce.to_vec()),
                     ciphertext: ciphertext
@@ -957,8 +968,12 @@ impl Session {
 
                 let mut padded_plaintext = plaintext.to_vec();
                 Self::pkcs7_pad(&mut padded_plaintext, AES_BLOCK_SIZE)?;
-                let ciphertext =
-                    self.encrypt_with_mechanism(key_handle, &mut mechanism, &padded_plaintext)?;
+                let ciphertext = self.encrypt_with_mechanism(
+                    key_handle,
+                    &mut mechanism,
+                    &padded_plaintext,
+                    None,
+                )?;
 
                 EncryptedContent {
                     iv: Some(iv.to_vec()),
@@ -977,6 +992,7 @@ impl Session {
                         key_handle,
                         &mut mechanism,
                         plaintext,
+                        fixed_output_len,
                     )?,
                     ..Default::default()
                 }
@@ -1001,6 +1017,7 @@ impl Session {
                         key_handle,
                         &mut mechanism,
                         plaintext,
+                        fixed_output_len,
                     )?,
                     ..Default::default()
                 }
@@ -1023,6 +1040,7 @@ impl Session {
                         key_handle,
                         &mut mechanism,
                         plaintext,
+                        fixed_output_len,
                     )?,
                     ..Default::default()
                 }
@@ -1047,6 +1065,17 @@ impl Session {
         algorithm: HsmEncryptionAlgorithm,
         ciphertext: &[u8],
         aad: &[u8],
+    ) -> HResult<Zeroizing<Vec<u8>>> {
+        self.decrypt_with_aad_and_output_len(key_handle, algorithm, ciphertext, aad, None)
+    }
+
+    pub fn decrypt_with_aad_and_output_len(
+        &self,
+        key_handle: CK_OBJECT_HANDLE,
+        algorithm: HsmEncryptionAlgorithm,
+        ciphertext: &[u8],
+        aad: &[u8],
+        fixed_output_len: Option<usize>,
     ) -> HResult<Zeroizing<Vec<u8>>> {
         match &algorithm {
             HsmEncryptionAlgorithm::MlKem => self.mlkem_decapsulate(key_handle, ciphertext),
@@ -1083,6 +1112,7 @@ impl Session {
                     ciphertext.get(AES_GCM_IV_LENGTH..).ok_or_else(|| {
                         HError::Default("Failed to extract ciphertext".to_owned())
                     })?,
+                    None,
                 )?;
                 Ok(plaintext)
             }
@@ -1120,6 +1150,7 @@ impl Session {
                     ciphertext.get(AES_CBC_IV_LENGTH..).ok_or_else(|| {
                         HError::Default("Failed to extract ciphertext".to_owned())
                     })?,
+                    None,
                 )?;
 
                 let plaintext = Self::pkcs7_unpad(padded_plaintext, AES_BLOCK_SIZE)?;
@@ -1131,7 +1162,12 @@ impl Session {
                     pParameter: std::ptr::null_mut(),
                     ulParameterLen: 0,
                 };
-                self.decrypt_with_mechanism(key_handle, &mut mechanism, ciphertext)
+                self.decrypt_with_mechanism(
+                    key_handle,
+                    &mut mechanism,
+                    ciphertext,
+                    fixed_output_len,
+                )
             }
             HsmEncryptionAlgorithm::RsaOaepSha256 => {
                 let mut params = CK_RSA_PKCS_OAEP_PARAMS {
@@ -1148,7 +1184,12 @@ impl Session {
                         std::mem::size_of::<CK_RSA_PKCS_OAEP_PARAMS>(),
                     )?,
                 };
-                self.decrypt_with_mechanism(key_handle, &mut mechanism, ciphertext)
+                self.decrypt_with_mechanism(
+                    key_handle,
+                    &mut mechanism,
+                    ciphertext,
+                    fixed_output_len,
+                )
             }
             HsmEncryptionAlgorithm::RsaOaepSha1 => {
                 let mut params = CK_RSA_PKCS_OAEP_PARAMS {
@@ -1165,7 +1206,12 @@ impl Session {
                         std::mem::size_of::<CK_RSA_PKCS_OAEP_PARAMS>(),
                     )?,
                 };
-                self.decrypt_with_mechanism(key_handle, &mut mechanism, ciphertext)
+                self.decrypt_with_mechanism(
+                    key_handle,
+                    &mut mechanism,
+                    ciphertext,
+                    fixed_output_len,
+                )
             }
         }
     }
@@ -1242,6 +1288,7 @@ impl Session {
                     .as_slice()
                     .get(processed_length..processed_length + round_length)
                     .ok_or_else(|| HError::Default("Failed to round data".to_owned()))?,
+                None,
             )?;
             for (i, iv_byte) in round_iv.iter_mut().enumerate().take(iv.len()) {
                 *iv_byte = *round_ciphertext
@@ -1341,6 +1388,7 @@ impl Session {
                     .ok_or_else(|| {
                         HError::Default("Failed to extract round ciphertext".to_owned())
                     })?,
+                None,
             )?;
 
             plaintext.extend_from_slice(&round_plaintext);
@@ -1359,6 +1407,7 @@ impl Session {
         key_handle: CK_OBJECT_HANDLE,
         mechanism: &mut CK_MECHANISM,
         data: &[u8],
+        fixed_output_len: Option<usize>,
     ) -> HResult<Vec<u8>> {
         let mut data = data.to_vec();
         hsm_call!(
@@ -1370,21 +1419,27 @@ impl Session {
             key_handle
         );
 
-        let mut encrypted_data_len: CK_ULONG = 0;
-        hsm_call!(
-            self.hsm,
-            format!(
-                "Failed to allocate encrypted data length. Data to encrypt is likely too big: {} \
-                 bytes. Error code",
-                data.len()
-            ),
-            C_Encrypt,
-            self.handle,
-            data.as_mut_ptr(),
-            CK_ULONG::try_from(data.len())?,
-            ptr::null_mut(),
-            &raw mut encrypted_data_len
-        );
+        let mut encrypted_data_len = match fixed_output_len {
+            Some(output_len) => CK_ULONG::try_from(output_len)?,
+            None => {
+                let mut encrypted_data_len: CK_ULONG = 0;
+                hsm_call!(
+                    self.hsm,
+                    format!(
+                        "Failed to allocate encrypted data length. Data to encrypt is likely too \
+                         big: {} bytes. Error code",
+                        data.len()
+                    ),
+                    C_Encrypt,
+                    self.handle,
+                    data.as_mut_ptr(),
+                    CK_ULONG::try_from(data.len())?,
+                    ptr::null_mut(),
+                    &raw mut encrypted_data_len
+                );
+                encrypted_data_len
+            }
+        };
 
         let mut encrypted_data = vec![0_u8; usize::try_from(encrypted_data_len)?];
         hsm_call!(
@@ -1407,6 +1462,7 @@ impl Session {
         key_handle: CK_OBJECT_HANDLE,
         mechanism: &mut CK_MECHANISM,
         encrypted_data: &[u8],
+        fixed_output_len: Option<usize>,
     ) -> HResult<Zeroizing<Vec<u8>>> {
         let mut encrypted_data = encrypted_data.to_vec();
         hsm_call!(
@@ -1418,17 +1474,23 @@ impl Session {
             key_handle
         );
 
-        let mut decrypted_data_len: CK_ULONG = 0;
-        hsm_call!(
-            self.hsm,
-            "Failed to get decrypted data length",
-            C_Decrypt,
-            self.handle,
-            encrypted_data.as_mut_ptr(),
-            CK_ULONG::try_from(encrypted_data.len())?,
-            ptr::null_mut(),
-            &raw mut decrypted_data_len
-        );
+        let mut decrypted_data_len = match fixed_output_len {
+            Some(output_len) => CK_ULONG::try_from(output_len)?,
+            None => {
+                let mut decrypted_data_len: CK_ULONG = 0;
+                hsm_call!(
+                    self.hsm,
+                    "Failed to get decrypted data length",
+                    C_Decrypt,
+                    self.handle,
+                    encrypted_data.as_mut_ptr(),
+                    CK_ULONG::try_from(encrypted_data.len())?,
+                    ptr::null_mut(),
+                    &raw mut decrypted_data_len
+                );
+                decrypted_data_len
+            }
+        };
 
         let mut decrypted_data = vec![0_u8; usize::try_from(decrypted_data_len)?];
         hsm_call!(
@@ -1900,6 +1962,21 @@ impl Session {
             )));
         }
         Ok(Some(()))
+    }
+
+    pub fn rsa_modulus_len(&self, key_handle: CK_OBJECT_HANDLE) -> HResult<Option<usize>> {
+        let mut template = [CK_ATTRIBUTE {
+            type_: CKA_MODULUS,
+            pValue: ptr::null_mut(),
+            ulValueLen: 0,
+        }];
+        if self
+            .call_get_attributes(key_handle, &mut template)?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        Ok(Some(usize::try_from(template[0].ulValueLen)?))
     }
 
     /// Get the metadata for a key

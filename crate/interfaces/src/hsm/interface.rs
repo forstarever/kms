@@ -191,6 +191,24 @@ impl HsmObject {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct HsmEncryptBatchRequest {
+    pub slot_id: usize,
+    pub key_id: Vec<u8>,
+    pub algorithm: CryptoAlgorithm,
+    pub data: Vec<u8>,
+    pub authenticated_encryption_additional_data: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct HsmDecryptBatchRequest {
+    pub slot_id: usize,
+    pub key_id: Vec<u8>,
+    pub algorithm: CryptoAlgorithm,
+    pub data: Vec<u8>,
+    pub authenticated_encryption_additional_data: Vec<u8>,
+}
+
 /// HSM trait
 /// This trait defines the operations that can be performed on an HSM.
 /// The HSM is assumed to be a PKCS#11 compliant device.
@@ -312,6 +330,28 @@ pub trait HSM: Send + Sync {
         authenticated_encryption_additional_data: &[u8],
     ) -> InterfaceResult<EncryptedContent>;
 
+    /// Encrypt several independent payloads. Providers may override this to
+    /// aggregate compatible operations into a single device dispatch.
+    async fn encrypt_batch(
+        &self,
+        requests: &[HsmEncryptBatchRequest],
+    ) -> InterfaceResult<Vec<EncryptedContent>> {
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(
+                self.encrypt(
+                    request.slot_id,
+                    &request.key_id,
+                    request.algorithm.clone(),
+                    &request.data,
+                    &request.authenticated_encryption_additional_data,
+                )
+                .await?,
+            );
+        }
+        Ok(responses)
+    }
+
     /// Decrypt data using the given key in the HSM.
     /// # Arguments
     /// * `slot_id` - the slot ID of the HSM
@@ -329,6 +369,28 @@ pub trait HSM: Send + Sync {
         data: &[u8],
         authenticated_encryption_additional_data: &[u8],
     ) -> InterfaceResult<Zeroizing<Vec<u8>>>;
+
+    /// Decrypt several independent payloads. Providers may override this to
+    /// aggregate compatible operations into a single device dispatch.
+    async fn decrypt_batch(
+        &self,
+        requests: &[HsmDecryptBatchRequest],
+    ) -> InterfaceResult<Vec<Zeroizing<Vec<u8>>>> {
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(
+                self.decrypt(
+                    request.slot_id,
+                    &request.key_id,
+                    request.algorithm.clone(),
+                    &request.data,
+                    &request.authenticated_encryption_additional_data,
+                )
+                .await?,
+            );
+        }
+        Ok(responses)
+    }
 
     /// Get the type of the key.
     /// This should be a single call to the HSM.

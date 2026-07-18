@@ -192,6 +192,22 @@ pub struct EncryptedContent {
     pub tag: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CryptoEncryptBatchRequest {
+    pub uid: String,
+    pub data: Vec<u8>,
+    pub cryptographic_algorithm: Option<CryptoAlgorithm>,
+    pub authenticated_encryption_additional_data: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CryptoDecryptBatchRequest {
+    pub uid: String,
+    pub data: Vec<u8>,
+    pub cryptographic_algorithm: Option<CryptoAlgorithm>,
+    pub authenticated_encryption_additional_data: Option<Vec<u8>>,
+}
+
 #[async_trait]
 pub trait CryptoOracle: Send + Sync {
     /// Encrypt data
@@ -210,6 +226,28 @@ pub trait CryptoOracle: Send + Sync {
         authenticated_encryption_additional_data: Option<&[u8]>,
     ) -> InterfaceResult<EncryptedContent>;
 
+    /// Encrypt several independent payloads. The default implementation preserves
+    /// existing semantics by executing requests in order; HSM-backed oracles can
+    /// override this to aggregate compatible operations before dispatch.
+    async fn encrypt_batch(
+        &self,
+        requests: &[CryptoEncryptBatchRequest],
+    ) -> InterfaceResult<Vec<EncryptedContent>> {
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(
+                self.encrypt(
+                    &request.uid,
+                    &request.data,
+                    request.cryptographic_algorithm.clone(),
+                    request.authenticated_encryption_additional_data.as_deref(),
+                )
+                .await?,
+            );
+        }
+        Ok(responses)
+    }
+
     /// Decrypt data
     /// # Arguments
     /// * `uid` - the ID of the key to use for decryption.
@@ -225,6 +263,28 @@ pub trait CryptoOracle: Send + Sync {
         cryptographic_algorithm: Option<CryptoAlgorithm>,
         authenticated_encryption_additional_data: Option<&[u8]>,
     ) -> InterfaceResult<Zeroizing<Vec<u8>>>;
+
+    /// Decrypt several independent payloads. The default implementation preserves
+    /// existing semantics by executing requests in order; HSM-backed oracles can
+    /// override this to aggregate compatible operations before dispatch.
+    async fn decrypt_batch(
+        &self,
+        requests: &[CryptoDecryptBatchRequest],
+    ) -> InterfaceResult<Vec<Zeroizing<Vec<u8>>>> {
+        let mut responses = Vec::with_capacity(requests.len());
+        for request in requests {
+            responses.push(
+                self.decrypt(
+                    &request.uid,
+                    &request.data,
+                    request.cryptographic_algorithm.clone(),
+                    request.authenticated_encryption_additional_data.as_deref(),
+                )
+                .await?,
+            );
+        }
+        Ok(responses)
+    }
 
     /// Get the key type
     /// On HSMs, this should be a single call to the HSM.
