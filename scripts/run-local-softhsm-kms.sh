@@ -2,7 +2,7 @@
 set -euo pipefail
 
 KMS_REPO="${KMS_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-SOFTHSM_PROJECT="${SOFTHSM_PROJECT:-$(cd "$KMS_REPO/../SoftHSMv2_pure_project_20260616" && pwd)}"
+SOFTHSM_PROJECT="${SOFTHSM_PROJECT:-$(cd "$KMS_REPO/../SoftHSMv2_cuda" && pwd)}"
 
 export SOFTHSM2_CONF="${SOFTHSM2_CONF:-$SOFTHSM_PROJECT/softhsm2.conf}"
 export SOFTHSM2_PKCS11_LIB="${SOFTHSM2_PKCS11_LIB:-$SOFTHSM_PROJECT/src/lib/.libs/libsofthsm2.so}"

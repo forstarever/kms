@@ -1,5 +1,5 @@
 # Local development profile for using the SoftHSMv2 build in:
-# /home/star/cuda-hsm/SoftHSMv2_pure_project_20260616
+# /home/star/cuda-hsm/SoftHSMv2_cuda
 #
 # Prefer scripts/run-local-softhsm-kms.sh for day-to-day use. The script detects
 # the current initialized SoftHSM slot and generates an equivalent runtime config.
